@@ -10,12 +10,10 @@ docs/         this file, plus the auth notes
 
 ## What lands where on cPanel
 
-| Workflow | Source | Destination | Reachable at |
+| Workflow | Deploys | Destination | Reachable at |
 | --- | --- | --- | --- |
-| Deploy Web to cPanel Production | `web/dist/` | `<remote root>/` | https://notes.aicountly.com |
-| Deploy API to cPanel Production | `server-php/` | `<remote root>/api/` | https://notes.aicountly.com/api |
-| Deploy Web to cPanel Sandbox | `web/dist/` | `<remote root>/` | https://notes.gh.aicountly.com |
-| Deploy API to cPanel Sandbox | `server-php/` | `<remote root>/api/` | https://notes.gh.aicountly.com/api |
+| Deploy to cPanel Production | `web/dist/` then `server-php/` | `<remote root>/` and `<remote root>/api/` | https://notes.aicountly.com (+ `/api`) |
+| Deploy to cPanel Sandbox | `web/dist/` then `server-php/` | `<remote root>/` and `<remote root>/api/` | https://notes.gh.aicountly.com (+ `/api`) |
 
 `<remote root>` is the `*_SSH_REMOTE_ROOT` secret for that environment,
 normally `public_html` (or the subdomain's own document root).
@@ -23,30 +21,33 @@ normally `public_html` (or the subdomain's own document root).
 Deployment is manual only — **Actions → pick a workflow → Run workflow**.
 Nothing deploys on push or merge.
 
-## Four workflows, not two
+## One workflow per environment, not per half
 
-The frontend and the API deploy independently, so a frontend release cannot
-disturb a working API and vice versa. They also have genuinely different jobs:
-the web workflow builds with Node and ships a compiled bundle, while the API
-workflow ships source and lints it with `php -l`.
+Production and sandbox are genuinely separate targets — different SSH
+credentials, different servers — so each gets its own workflow. Within one
+environment, though, the web build and the API are deployed by the same run,
+one after the other: first `web/dist/` to the document root, then
+`server-php/` to `api/` inside it. Splitting those into separate workflows
+would only mean clicking twice for something that is always meant to happen
+together, with two SSH sessions and two sets of runner setup instead of one.
 
-### Why the api folder survives a web deploy
+### Why the api folder survives the web deploy step
 
-The web deploy runs `rsync --delete` against the document root, which would
-otherwise remove everything not in the build — including `api/`, since the API
-lives inside the document root. The web workflow therefore excludes `api/`
-explicitly. **Removing that exclude would delete the entire backend on the next
-web deploy.**
+The web deploy step runs `rsync --delete` against the document root, which
+would otherwise remove everything not in the build — including `api/`, since
+the API lives inside the document root. That step therefore excludes `api/`
+explicitly. **Removing that exclude would delete the entire backend on the
+next deploy.**
 
-### Why the API's .env survives an API deploy
+### Why the API's .env survives the API deploy step
 
-The API deploy also runs `rsync --delete`, this time against `api/`. The API's
-`.env` is created once by hand on the server and exists nowhere else, so both
-`--exclude='.env'` and `--exclude='.env.*'` are what keep it alive. Removing
-them would wipe the live configuration on the next deploy.
+The API deploy step also runs `rsync --delete`, this time against `api/`. The
+API's `.env` is created once by hand on the server and exists nowhere else, so
+both `--exclude='.env'` and `--exclude='.env.*'` are what keep it alive.
+Removing them would wipe the live configuration on the next deploy.
 
 Neither `.env` is ever uploaded either: `.gitignore` keeps them out of the
-repository, and the API workflow fails the build outright if a committed `.env`
+repository, and the workflow fails the build outright if a committed `.env`
 appears under `server-php/`.
 
 ## Configuration: two different mechanisms
@@ -68,9 +69,9 @@ public to anyone who views the page source.
 
 The API URL needs no configuration in the normal case: with
 `PROD_API_BASE_URL` / `SANDBOX_API_BASE_URL` unset, the app calls its own origin
-+ `/api`, which is where the API workflow deploys `server-php`. Those repository
-variables exist only to override that — for example if the API moves to its own
-domain.
++ `/api`, which is where the same workflow's API step deploys `server-php`.
+Those repository variables exist only to override that — for example if the API
+moves to its own domain.
 
 ### server-php — runtime
 
@@ -121,19 +122,19 @@ Per environment, under Settings → Secrets and variables → Actions → Secret
 `PROD_SSH_HOST`, `PROD_SSH_PORT`, `PROD_SSH_USER`, `PROD_SSH_PRIVATE_KEY`,
 `PROD_SSH_REMOTE_ROOT` — and the same five with a `SANDBOX_` prefix.
 
-All four workflows validate these before building, and verify SSH
-authentication before writing anything to the server. Because the deploys run
-with `--delete`, a `*_SSH_REMOTE_ROOT` that would resolve to the home directory
+Both workflows validate these before building, and verify SSH authentication
+before writing anything to the server. Because the deploys run with
+`--delete`, a `*_SSH_REMOTE_ROOT` that would resolve to the home directory
 itself, a system directory, or anything containing `..` is refused.
 
 ## First deploy checklist
 
 1. Create the subdomain in cPanel and note its document root.
 2. Add the five SSH secrets for that environment.
-3. Run **Deploy API to cPanel …**.
-4. Create `api/.env` on the server (see above) — the API is deployed but
-   unconfigured until you do.
-5. Run **Deploy Web to cPanel …**.
-6. Confirm `https://<host>/api/health` returns the right `env`, then open the
-   site and sign in. See [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md)
+3. Run **Deploy to cPanel …**. This deploys web and API together; the API is
+   deployed but unconfigured until the next step.
+4. Create `api/.env` on the server (see above), from `server-php/.env.example`.
+5. Re-run **Deploy to cPanel …** (or just confirm the API), then confirm
+   `https://<host>/api/health` returns the right `env` and open the site to
+   sign in. See [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md)
    for what a healthy login looks like.

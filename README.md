@@ -99,7 +99,7 @@ on every request.
 
 ## Deployment
 
-Deployment is **manual only**. Nothing deploys on push or merge — all four
+Deployment is **manual only**. Nothing deploys on push or merge — both
 workflows trigger exclusively via `workflow_dispatch`.
 
 To deploy: **Actions** → pick a workflow → **Run workflow** → pick a branch →
@@ -107,13 +107,13 @@ To deploy: **Actions** → pick a workflow → **Run workflow** → pick a branc
 
 | Workflow | Deploys | To |
 | --- | --- | --- |
-| Deploy Web to cPanel Production | `web/dist/` | document root |
-| Deploy API to cPanel Production | `server-php/` | `api/` in the document root |
-| Deploy Web to cPanel Sandbox | `web/dist/` | document root |
-| Deploy API to cPanel Sandbox | `server-php/` | `api/` in the document root |
+| Deploy to cPanel Production | `web/dist/` then `server-php/` | document root, then `api/` inside it |
+| Deploy to cPanel Sandbox | `web/dist/` then `server-php/` | document root, then `api/` inside it |
 
-The frontend and the API deploy separately, so releasing one cannot disturb the
-other. Source, `node_modules`, and `.env` never reach the server.
+Production and sandbox deploy separately, so releasing to one cannot disturb
+the other. Within one environment, web and API deploy together in the same
+run — they always change in step, so there is no separate "API only" workflow
+to remember to run. Source, `node_modules`, and `.env` never reach the server.
 
 Before deploying, each workflow checks that every required SSH secret is set and
 that the remote root is a safe path, so a misconfigured repository fails in
@@ -135,25 +135,25 @@ resolve to the home directory itself (`.`, `~`, empty), a system directory, or
 anything containing `..`.
 
 The repository **variables** `PROD_API_BASE_URL` and `SANDBOX_API_BASE_URL` are
-optional. Unset, the app calls its own origin + `/api` — which is where these
-same workflows put the API. Set one only to point the app at a different API
-domain.
+optional. Unset, the app calls its own origin + `/api` — which is where the same
+workflow puts the API. Set one only to point the app at a different API domain.
 
-### Notes on the rsync step
+### Notes on the rsync steps
 
-Both deploys use `rsync --delete`, and the excludes are what make that safe.
+Each workflow runs two `rsync --delete` steps, one after the other, and the
+excludes are what make that safe.
 
-The **web** deploy syncs the document root and excludes:
+The **web** step syncs the document root and excludes:
 
-- `api/` — the PHP backend lives inside the document root and is deployed by its
-  own workflow. **Without this exclude every web deploy would delete the entire
-  API.**
+- `api/` — the PHP backend lives inside the document root and is deployed by the
+  next step in the same run. **Without this exclude the web step would delete
+  the entire API.**
 - `.well-known/` — Let's Encrypt / AutoSSL validation; removing it breaks
   certificate renewal
 - `cgi-bin/` — cPanel-managed, present in every document root
 - `.env`, `.env.*`, `.git*` — never published
 
-The **API** deploy syncs `api/` and excludes `.env`, `.env.*` and `.git*`: the
+The **API** step syncs `api/` and excludes `.env`, `.env.*` and `.git*`: the
 API's `.env` is created once on the server and read at runtime, so it must
 survive every deploy. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
