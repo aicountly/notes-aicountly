@@ -178,14 +178,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
     // mutation on each keystroke rather than once per opening.
   }, [open])
 
-  const startNote = async (noteType: NoteType, announcement: string) => {
+  const startNote = async (noteType: NoteType, whenItFails: string) => {
     setError(null)
     try {
       const note = await create.mutateAsync({ note_type: noteType, source: 'command-palette' })
       onClose()
       navigate(`/notes/${note.id}`)
     } catch (reason) {
-      setError(`${announcement}: ${describeError(reason)}`)
+      setError(`${whenItFails}: ${describeError(reason)}`)
     }
   }
 
@@ -464,6 +464,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               </Button>
             ) : null}
           </div>
+
+          {busy ? (
+            <p className="palette__status" role="status">
+              Creating your note…
+            </p>
+          ) : null}
 
           <div className="palette__body">
             {mode === 'pulse' ? (

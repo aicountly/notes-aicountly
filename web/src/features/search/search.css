@@ -242,7 +242,6 @@
 }
 
 .search__more-note,
-.search__filters-hint,
 .search__error {
   margin: var(--notes-space-3) 0 0;
   font-size: var(--notes-text-sm);
@@ -406,6 +405,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--notes-space-2);
+}
+
+.palette__status {
+  margin: 0;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
 }
 
 .palette__pulse-question {

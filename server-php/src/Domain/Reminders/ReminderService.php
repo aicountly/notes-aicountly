@@ -168,7 +168,7 @@ final class ReminderService
     {
         $this->permissions->requireNote($identity, $noteId, NotePermissionService::VIEW, columns: self::NOTE_COLUMNS);
 
-        $dueAt = $this->timestamp($input['due_at'] ?? null, 'due_at', required: true);
+        $dueAt = $this->timestamp($input['due_at'] ?? null, 'due_at');
         $timezone = $this->timezone($input['timezone'] ?? null);
         $rule = $this->recurrence($input['recurrence_rule'] ?? null, $dueAt, $timezone);
 
@@ -225,12 +225,14 @@ final class ReminderService
 
         $updates = [];
         $bindings = ['id' => $reminderId, 'user' => $identity->userId];
+        $timingChanged = false;
 
         $dueAt = self::instant($row['due_at']);
         if (array_key_exists('due_at', $input)) {
-            $dueAt = $this->timestamp($input['due_at'], 'due_at', required: true);
+            $dueAt = $this->timestamp($input['due_at'], 'due_at');
             $updates[] = 'due_at = :due_at::timestamptz';
             $bindings['due_at'] = $dueAt->format(\DateTimeInterface::RFC3339);
+            $timingChanged = true;
         }
 
         // The zone governs where the *next* occurrence falls, not when this one
@@ -242,22 +244,22 @@ final class ReminderService
             $timezone = $this->timezone($input['timezone']);
             $updates[] = 'timezone = :timezone';
             $bindings['timezone'] = $timezone->getName();
+            $timingChanged = true;
         }
 
-        // A rule is re-resolved whenever either half of the pair moves, because
-        // a COUNT was turned into an absolute end date against the old start
-        // and would otherwise end the series in the wrong place.
+        // The rule is re-resolved whenever the anchor moves as well as when the
+        // rule itself changes: a `COUNT` was turned into an absolute end date
+        // against the old start (see RecurrenceRule::withCountResolved), and
+        // leaving it there would end the series in the wrong place.
         $storedRule = $row['recurrence_rule'] === null ? null : (string) $row['recurrence_rule'];
-        if (array_key_exists('recurrence_rule', $input)) {
-            $rule = $this->recurrence($input['recurrence_rule'], $dueAt, $timezone);
+        $ruleInput = array_key_exists('recurrence_rule', $input) ? $input['recurrence_rule'] : $storedRule;
+        if (array_key_exists('recurrence_rule', $input) || ($storedRule !== null && $timingChanged)) {
+            $rule = $this->recurrence($ruleInput, $dueAt, $timezone);
             $updates[] = 'recurrence_rule = :rule';
             $updates[] = 'reminder_type = :type';
             $bindings['rule'] = $rule?->toString();
             $bindings['type'] = $rule === null ? 'datetime' : 'recurring';
-        } elseif ($storedRule !== null && $updates !== []) {
-            $rule = $this->recurrence($storedRule, $dueAt, $timezone);
-            $updates[] = 'recurrence_rule = :rule';
-            $bindings['rule'] = $rule?->toString();
+            $timingChanged = true;
         }
 
         if (array_key_exists('action_id', $input)) {
@@ -279,15 +281,19 @@ final class ReminderService
             $updates[] = 'completed_at = NULL';
             $updates[] = 'snoozed_until = CASE WHEN :status::text = \'scheduled\' THEN NULL ELSE snoozed_until END';
             $bindings['status'] = $status;
+            $timingChanged = $timingChanged || $status === 'scheduled';
         }
 
         if ($updates === []) {
             return $this->present($row);
         }
 
-        // Any change to when this fires invalidates the fact that it already
-        // did: a reminder moved to next week must ring again next week.
-        $updates[] = 'notified_at = NULL';
+        // Rescheduling invalidates the fact that this already fired: a reminder
+        // moved to next week has to ring again next week. A change that does
+        // not move it — relinking an action — must not re-ring it.
+        if ($timingChanged) {
+            $updates[] = 'notified_at = NULL';
+        }
         $updates[] = 'updated_at = now()';
 
         Connection::execute(
@@ -349,7 +355,7 @@ final class ReminderService
             }
             $until = $now->add(new \DateInterval('PT' . $minutes . 'M'));
         } else {
-            $until = $this->timestamp($input['until'], 'until', required: true);
+            $until = $this->timestamp($input['until'], 'until');
             if ($until <= $now) {
                 throw ApiException::validation(['until' => 'Snooze to a moment in the future.']);
             }
@@ -466,7 +472,7 @@ final class ReminderService
                      AND coalesce(due.snoozed_until, due.due_at) <= now()
                    ORDER BY coalesce(due.snoozed_until, due.due_at)
                    LIMIT :limit
-                   FOR UPDATE SKIP LOCKED
+                   FOR UPDATE OF due SKIP LOCKED
                )
              RETURNING r.*, n.title AS note_title, left(n.extracted_text, 200) AS note_text,
                        n.note_type AS note_type, coalesce(r.snoozed_until, r.due_at) AS due_effective_at',
@@ -582,14 +588,10 @@ final class ReminderService
         return (string) $row['id'];
     }
 
-    private function timestamp(mixed $value, string $field, bool $required): ?\DateTimeImmutable
+    private function timestamp(mixed $value, string $field): \DateTimeImmutable
     {
         if ($value === null || $value === '') {
-            if ($required) {
-                throw ApiException::validation([$field => 'A reminder needs a date and time.']);
-            }
-
-            return null;
+            throw ApiException::validation([$field => 'A reminder needs a date and time.']);
         }
         if (!is_scalar($value)) {
             throw ApiException::validation([$field => 'Use an ISO-8601 date and time.']);
