@@ -6,6 +6,7 @@ namespace Aicountly\Api\Tests\Cases;
 
 use Aicountly\Api\Auth\Identity;
 use Aicountly\Api\Controllers\ExportController;
+use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Export\NoteExportService;
 use Aicountly\Api\Http\Request;
 use Aicountly\Api\Http\Response;
@@ -483,5 +484,53 @@ final class ExportTest extends TestCase
 
         $this->assertSame(200, $result['status']);
         $this->assertContainsString('shared reading', $result['content']);
+    }
+
+    public function testANoteFromAnotherCompanyCannotBeExported(): void
+    {
+        $aliceAtOne = new ApiClient(Support::user('a', 'company-1'));
+        $note = $aliceAtOne->post('/notes', [
+            'title' => 'Company one',
+            'document' => ['type' => 'doc', 'content' => [self::paragraph('figures for company one')]],
+        ])['body']['data'];
+
+        // A stale membership row: the grant is real, the company is not.
+        Connection::execute(
+            'INSERT INTO note_members (id, note_id, user_id, role, invited_by)
+             VALUES (:id, :note, :user, :role, :by)',
+            [
+                'id' => Uuid::v4(),
+                'note' => $note['id'],
+                'user' => 'user-b',
+                'role' => 'viewer',
+                'by' => 'user-a',
+            ],
+        );
+
+        $wrongCompany = $this->export(new ApiClient(Support::user('b', 'company-2')), $note['id'], ['format' => 'md']);
+        $this->assertSame(404, $wrongCompany['status']);
+        $this->assertSame('', $wrongCompany['content'], 'not one byte crosses the tenant boundary');
+
+        // The same grant inside the right company does open the note, so this
+        // is the tenant gate rather than the membership being ignored.
+        $rightCompany = $this->export(new ApiClient(Support::user('b', 'company-1')), $note['id'], ['format' => 'md']);
+        $this->assertSame(200, $rightCompany['status']);
+        $this->assertContainsString('figures for company one', $rightCompany['content']);
+    }
+
+    public function testTheOwnerActingInAnotherCompanyCannotExportTheirOwnNote(): void
+    {
+        $aliceAtOne = new ApiClient(Support::user('a', 'company-1'));
+        $note = $aliceAtOne->post('/notes', [
+            'title' => 'Company one',
+            'document' => ['type' => 'doc', 'content' => [self::paragraph('filed under company one')]],
+        ])['body']['data'];
+
+        // Ownership is a grant, not a bypass: the tenant gate applies even to
+        // the person who wrote the note.
+        $result = $this->export(new ApiClient(Support::user('a', 'company-2')), $note['id'], ['format' => 'md']);
+
+        $this->assertSame(404, $result['status']);
+        $this->assertSame('', $result['content']);
     }
 }

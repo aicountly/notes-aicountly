@@ -533,4 +533,146 @@ final class SyncTest extends TestCase
         $this->assertSame(1, $purged);
         $this->assertSame(0, (int) Connection::selectOne('SELECT count(*) AS n FROM sync_operations')['n']);
     }
+
+    // -- Timestamps a device can send but PostgreSQL cannot store -----------
+
+    public function testASinceValueOutsideThePostgresRangeIsAFullSyncNotACrash(): void
+    {
+        $this->alice->post('/notes', ['document' => Support::doc('still here')]);
+
+        // PHP parses all four of these happily, into years PostgreSQL refuses.
+        // Bound into `::timestamptz` they used to come back as an uncaught
+        // PDOException — a 500 carrying a fragment of the statement, from a
+        // cursor the client had no way to get out of.
+        foreach (['+999999999 years', '@99999999999999', '-4713-01-01', '0000-00-00'] as $since) {
+            $result = $this->alice->get('/sync/pull', ['since' => $since]);
+
+            $this->assertSame(200, $result['status'], 'since=' . $since . ' is answered, not fatal');
+            $this->assertCount(1, $result['body']['data']['notes'], 'and falls back to a full sync');
+        }
+    }
+
+    public function testAForgedCursorTimestampCannotReachTheDatabase(): void
+    {
+        $this->alice->post('/notes', ['document' => Support::doc('recoverable')]);
+
+        $cursor = rtrim(strtr(base64_encode((string) json_encode([
+            'ts' => '+999999999 years',
+            'id' => Uuid::v4(),
+            'del' => '1970-01-01T00:00:00Z',
+        ])), '+/', '-_'), '=');
+
+        $result = $this->alice->get('/sync/pull', ['since' => $cursor]);
+
+        $this->assertSame(200, $result['status']);
+        $this->assertCount(1, $result['body']['data']['notes'], 'an unusable cursor is a full sync');
+    }
+
+    public function testAnUnstorableClientStampDoesNotKillTheBatch(): void
+    {
+        $first = Uuid::v4();
+        $second = Uuid::v4();
+
+        $result = $this->push($this->alice, [
+            array_merge(
+                self::op('note.create', $first, ['document' => Support::doc('poisoned stamp')]),
+                ['client_stamp' => '+999999999 years'],
+            ),
+            self::op('note.create', $second, ['document' => Support::doc('the one after it')]),
+        ]);
+
+        // The stamp is bound outside the per-operation guard, so an unstorable
+        // one used to take the whole request down *after* the first operation
+        // had already been applied and before anything reached the ledger —
+        // leaving the retry to apply it a second time.
+        $this->assertSame(200, $result['status']);
+        $this->assertSame(2, $result['body']['meta']['applied'], 'one bad stamp does not fail the batch');
+        $this->assertSame(200, $this->alice->get('/notes/' . $second)['status']);
+
+        $row = Connection::selectOne('SELECT count(*) AS n FROM sync_operations');
+        $this->assertSame(2, (int) $row['n'], 'and both operations are in the ledger, so a replay is a no-op');
+    }
+
+    public function testAReplayedActionStopsCarryingItsTextOnceAccessIsWithdrawn(): void
+    {
+        $note = $this->alice->post('/notes', [
+            'title' => 'Board pack',
+            'document' => Support::checklist([['text' => 'wire the deposit to Acme', 'checked' => false]]),
+        ])['body']['data'];
+        $this->alice->post('/notes/' . $note['id'] . '/members', ['user_id' => 'user-b', 'role' => 'editor']);
+
+        $action = $this->firstAction($this->bob, $note['id']);
+        $operation = self::op('action.complete', $action['id'], ['status' => 'done']);
+        $this->assertSame('applied', $this->push($this->bob, [$operation])['body']['data'][0]['status']);
+
+        $this->alice->delete('/notes/' . $note['id'] . '/members/user-b');
+        $this->assertSame(404, $this->bob->get('/notes/' . $note['id'])['status']);
+
+        $replay = $this->push($this->bob, [$operation])['body']['data'][0];
+
+        // A checklist item's text is a line of the note. The ledger row must
+        // not be a second, permanent read grant for it.
+        $this->assertTrue($replay['replayed']);
+        $this->assertFalse(array_key_exists('action', $replay), 'the action is no longer handed back');
+        $this->assertTrue($replay['action_unavailable']);
+        $this->assertFalse(
+            str_contains((string) json_encode($replay), 'wire the deposit'),
+            'and no part of the note text survives anywhere in the answer',
+        );
+    }
+
+    // -- Tenancy ------------------------------------------------------------
+
+    public function testANoteFromAnotherCompanyIsNeverInAPull(): void
+    {
+        $aliceAtOne = new ApiClient(Support::user('a', 'company-1'));
+        $note = $aliceAtOne->post('/notes', ['document' => Support::doc('company one only')])['body']['data'];
+
+        // The same person, acting in a different company. The grant is intact;
+        // the tenant gate is what has to stop this.
+        $aliceAtTwo = new ApiClient(Support::user('a', 'company-2'));
+
+        $pull = $aliceAtTwo->get('/sync/pull')['body']['data'];
+        $this->assertCount(0, $pull['notes']);
+
+        $aliceAtOne->delete('/notes/' . $note['id']);
+        $this->assertCount(
+            0,
+            $aliceAtTwo->get('/sync/pull')['body']['data']['deleted_note_ids'],
+            'not even the id of a note deleted in the other company',
+        );
+        $this->assertCount(1, $aliceAtOne->get('/sync/pull')['body']['data']['deleted_note_ids']);
+    }
+
+    public function testAStaleMembershipInTheWrongCompanyCannotPushThroughTheQueue(): void
+    {
+        $aliceAtOne = new ApiClient(Support::user('a', 'company-1'));
+        $note = $aliceAtOne->post('/notes', ['document' => Support::doc('company one only')])['body']['data'];
+
+        // A membership row that outlived the company it was granted in.
+        Connection::execute(
+            'INSERT INTO note_members (id, note_id, user_id, role, invited_by)
+             VALUES (:id, :note, :user, :role, :by)',
+            [
+                'id' => Uuid::v4(),
+                'note' => $note['id'],
+                'user' => 'user-b',
+                'role' => 'editor',
+                'by' => 'user-a',
+            ],
+        );
+
+        $bobAtTwo = new ApiClient(Support::user('b', 'company-2'));
+        $entry = $this->push($bobAtTwo, [self::op('note.update', $note['id'], ['title' => 'hijacked'])])
+            ['body']['data'][0];
+
+        $this->assertSame('rejected', $entry['status']);
+        $this->assertSame('NOT_FOUND', $entry['error']['code']);
+        $this->assertCount(0, $bobAtTwo->get('/sync/pull')['body']['data']['notes']);
+
+        // The same row *is* a grant inside the company it belongs to, so this
+        // is the tenant gate and not the membership simply being ignored.
+        $bobAtOne = new ApiClient(Support::user('b', 'company-1'));
+        $this->assertCount(1, $bobAtOne->get('/sync/pull')['body']['data']['notes']);
+    }
 }

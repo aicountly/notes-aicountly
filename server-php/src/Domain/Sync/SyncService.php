@@ -382,15 +382,38 @@ final class SyncService
         $decoded = is_string($row['result']) ? json_decode((string) $row['result'], true) : $row['result'];
         $result = is_array($decoded) ? $decoded : [];
 
-        if ($entityType === 'note'
-            && $entityId !== null
-            && isset($result['note'])
-            && $this->permissions->roleFor($identity, $entityId, includeTrashed: true) === null) {
-            unset($result['note']);
-            $result['note_unavailable'] = true;
+        // The stored answer carries the entity the operation acted on, and an
+        // `action` payload carries the checklist line's text — which is a line
+        // of the note. So the re-check is keyed on the entity type rather than
+        // written out for notes alone: a ledger row is not a second, permanent
+        // read grant for whichever shape of content it happens to hold.
+        if ($entityId !== null
+            && isset($result[$entityType])
+            && !$this->stillReadable($identity, $entityType, $entityId)) {
+            unset($result[$entityType]);
+            $result[$entityType . '_unavailable'] = true;
         }
 
         return self::entry($operationId, $entityType, $entityId, $operation, (string) $row['status'], $result, true);
+    }
+
+    /**
+     * May the caller still reach the entity this operation acted on?
+     *
+     * An action id is not an authorisation, here for the same reason it is not
+     * one on the way in: the note it hangs off is resolved first and the role
+     * check applied to *that*. An action row that has since gone cannot be
+     * placed against a note at all, and an entity that cannot be placed is
+     * treated as unreadable rather than waved through.
+     */
+    private function stillReadable(Identity $identity, string $entityType, string $entityId): bool
+    {
+        $noteId = $entityType === 'action' ? $this->actions->noteIdFor($entityId) : $entityId;
+        if ($noteId === null) {
+            return false;
+        }
+
+        return $this->permissions->roleFor($identity, $noteId, includeTrashed: true) !== null;
     }
 
     /**
@@ -557,12 +580,27 @@ final class SyncService
             return null;
         }
         try {
-            return (new \DateTimeImmutable($value))
-                ->setTimezone(new \DateTimeZone('UTC'))
-                ->format(self::TIMESTAMP_FORMAT);
+            $moment = (new \DateTimeImmutable($value))->setTimezone(new \DateTimeZone('UTC'));
         } catch (\Throwable) {
             return null;
         }
+
+        // PHP parses years PostgreSQL cannot store — `+999999999 years`,
+        // `@99999999999999`, `-4713-01-01`, and `0000-00-00` (which PHP reads
+        // as year -1). Formatting one of those and binding it makes the
+        // *database* refuse the value, and the PDOException that follows is
+        // raised outside the per-operation guard: a `?since=` a client cannot
+        // recover from, and a push that dies with part of its batch already
+        // applied and nothing written to the ledger, so the retry re-applies
+        // it. Out of range is treated exactly as unparseable, which both
+        // callers already handle — a full sync, and a null stamp. RFC 3339 has
+        // no year outside 0001-9999 either, so nothing legitimate is refused.
+        $year = (int) $moment->format('Y');
+        if ($year < 1 || $year > 9999) {
+            return null;
+        }
+
+        return $moment->format(self::TIMESTAMP_FORMAT);
     }
 
     private static function iso(string $value): string
