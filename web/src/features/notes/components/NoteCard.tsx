@@ -22,6 +22,7 @@ import type { IconName } from '../../../shared/ui/Icon'
 import { Button, Dialog, LiveStatus } from '../../../shared/ui/primitives'
 import { ApiError, api } from '../../../shared/api/client'
 import { queryKeys } from '../../../shared/query/queryClient'
+import { useAppConfig } from '../../../app/AppConfigProvider'
 import {
   useDuplicateNote,
   useNoteFlag,
@@ -75,6 +76,18 @@ export function formatAbsoluteTime(iso: string | null | undefined): string {
   if (!iso) return ''
   const value = Date.parse(iso)
   return Number.isNaN(value) ? '' : ABSOLUTE.format(value)
+}
+
+/**
+ * How long a trashed note has left.
+ *
+ * The retention window comes from the deployment's own config, so an install
+ * that keeps trash for seven days does not promise thirty.
+ */
+export function daysUntilPurge(deletedAt: string | null, retentionDays: number): number {
+  if (!deletedAt) return retentionDays
+  const elapsedDays = (Date.now() - Date.parse(deletedAt)) / 86_400_000
+  return Number.isNaN(elapsedDays) ? retentionDays : Math.max(0, Math.ceil(retentionDays - elapsedDays))
 }
 
 const ROLE_RANK: Record<NoteRole, number> = { owner: 4, editor: 3, commenter: 2, viewer: 1 }
@@ -634,6 +647,7 @@ export interface NoteCardProps {
 
 export function NoteCard({ note, to, selected = false, onRemoved }: NoteCardProps) {
   const flag = useNoteFlag()
+  const config = useAppConfig()
   const capabilities = capabilitiesForRole(note.role)
   const typeIcon = TYPE_ICON[note.note_type]
   const checklist = note.checklist
@@ -736,6 +750,14 @@ export function NoteCard({ note, to, selected = false, onRemoved }: NoteCardProp
         {note.privacy_mode === 'private' || note.is_locked ? (
           <span className="note-card__meta-item">
             <Icon name="lock" size={13} label="Private" />
+          </span>
+        ) : null}
+
+        {note.deleted_at ? (
+          <span className="note-card__meta-item">
+            <Icon name="trash" size={13} />
+            {`${daysUntilPurge(note.deleted_at, config.limits.trash_retention_days)}d left`}
+            <span className="sr-only"> until this note is deleted for good</span>
           </span>
         ) : null}
 

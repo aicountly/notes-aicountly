@@ -25,12 +25,16 @@ import type { SuggestionMenuItem } from './extensions/suggestionBridge'
 export const SLASH_GROUPS = ['Basic', 'Lists', 'Blocks', 'Insert'] as const
 export type SlashGroup = (typeof SLASH_GROUPS)[number]
 
-/** What the deployment and the current note allow. */
+/**
+ * What this deployment allows.
+ *
+ * One field per server feature flag a command can depend on; it grows as
+ * capabilities do. A command that gates on a flag is filtered out entirely
+ * rather than disabled, which is why this is passed to the filter and not to
+ * the menu.
+ */
 export interface SlashAvailability {
   ai: boolean
-  canvas: boolean
-  /** False until something can actually accept an image. */
-  canInsertImages: boolean
 }
 
 /**
@@ -40,6 +44,7 @@ export interface SlashAvailability {
 export interface SlashActions {
   openNoteLinkPicker: () => void
   openImageDialog: () => void
+  askPulse: () => void
 }
 
 export interface SlashCommand extends SuggestionMenuItem {
@@ -186,6 +191,15 @@ const BUILT_IN: SlashCommand[] = [
     icon: 'calendar',
     keywords: ['today', 'time', 'day'],
     run: (editor) => editor.chain().focus().insertDateChip(new Date()).run(),
+  },
+  {
+    id: 'pulse',
+    label: 'Ask Pulse',
+    group: 'Insert',
+    icon: 'pulse',
+    keywords: ['ai', 'assistant', 'summarise', 'rewrite', 'draft'],
+    isAvailable: (availability) => availability.ai,
+    run: (_editor, actions) => actions.askPulse(),
   },
 ]
 

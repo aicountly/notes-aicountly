@@ -5,6 +5,10 @@
  * literal colour, shadow or radius, so dark mode stays a token swap.
  * ------------------------------------------------------------------------- */
 
+/* Cards and rows are lists, laid out. The reset keeps the markers out. */
+ul.notes-grid,
+ul.notes-list { list-style: none; margin: 0; padding: 0; }
+
 /* --- Card and row: one link, several buttons ------------------------------
  * The whole card is clickable, but the accessible target is a single anchor
  * stretched over it. A <button> nested inside an <a> is invalid HTML, and a
@@ -314,6 +318,9 @@
 
 /* --- Editor pane ---------------------------------------------------------- */
 
+.editor__skeleton { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+.editor__skeleton > :first-child { margin-bottom: var(--notes-space-3); }
+.editor__pane-notice { padding: var(--notes-space-3) var(--notes-space-4) 0; }
 .editor__pane-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .editor__crumb-link { color: inherit; text-decoration: none; }
 .editor__crumb-link:hover { color: var(--notes-primary); text-decoration: underline; }
