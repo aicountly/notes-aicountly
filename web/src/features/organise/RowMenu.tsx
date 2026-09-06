@@ -12,7 +12,7 @@
  * never hidden and never left to fail on click.
  */
 
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, Ref } from 'react'
 
 import { Icon } from '../../shared/ui/Icon'
@@ -42,14 +42,13 @@ export interface RowMenuProps {
   items: RowMenuItem[]
   /** Set while an action is in flight, so a second click cannot race the first. */
   busy?: boolean
-  error?: string | null
   ref?: Ref<RowMenuHandle>
 }
 
 /** Roughly the tallest this menu gets; below that it opens upwards. */
 const POPUP_HEIGHT = 260
 
-export function RowMenu({ label, items, busy = false, error = null, ref }: RowMenuProps) {
+export function RowMenu({ label, items, busy = false, ref }: RowMenuProps) {
   const [open, setOpen] = useState(false)
   const [above, setAbove] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -127,7 +126,10 @@ export function RowMenu({ label, items, busy = false, error = null, ref }: RowMe
           onKeyDown={onKeyDown}
         >
           {items.map((item) => (
-            <div key={item.key}>
+            // A menu's children are menu items and separators; a wrapper
+            // element between them is a wrapper a screen reader reads as
+            // "group of one".
+            <Fragment key={item.key}>
               {item.separated ? <hr className="org-menu__separator" /> : null}
               <button
                 type="button"
@@ -139,6 +141,10 @@ export function RowMenu({ label, items, busy = false, error = null, ref }: RowMe
                 aria-disabled={item.disabledReason !== undefined || busy}
                 onClick={() => {
                   if (item.disabledReason !== undefined || busy) return
+                  // Closed *before* the action runs, so focus is on the trigger
+                  // when a dialog opens over it — which is where the dialog
+                  // then puts it back on close.
+                  close()
                   item.onSelect()
                 }}
               >
@@ -148,14 +154,8 @@ export function RowMenu({ label, items, busy = false, error = null, ref }: RowMe
                   <span className="org-menu__reason">{item.disabledReason}</span>
                 ) : null}
               </button>
-            </div>
+            </Fragment>
           ))}
-
-          {error ? (
-            <p className="org-menu__status" role="alert">
-              {error}
-            </p>
-          ) : null}
         </div>
       ) : null}
     </div>
