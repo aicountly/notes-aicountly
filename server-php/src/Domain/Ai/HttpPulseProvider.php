@@ -25,6 +25,13 @@ use Aicountly\Api\Support\Logger;
  *   { "model": …, "messages": [{"role": "system"|"user", "content": …}] }
  *   → 200 { "model": …, "choices": [{"message": {"content": …}}] }
  *
+ * `PULSE_API_URL` therefore names a **model gateway**, not the AICOUNTLY Pulse
+ * product: Pulse is an assistant that grounds answers in its own connectors and
+ * exposes no context-in/answer-out route, so there is nothing there for this
+ * adapter to call today. That is why the flag ships off and why nothing here
+ * pretends otherwise — see docs/PULSE_INTEGRATION.md for the surfaces that do
+ * exist and the decision this is waiting on.
+ *
  * Three rules this class exists to keep:
  *
  *   - **Roles stay separate.** The bundle's instructions and the note text it

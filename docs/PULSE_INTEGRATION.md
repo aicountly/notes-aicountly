@@ -112,6 +112,32 @@ same thing, and a Notes↔Pulse call must pass `cmp_id` explicitly rather than
 assume the session implies it. This is the detail most likely to produce a
 "works for me, empty for them" bug once the two are wired.
 
+## Sibling API origins — an ecosystem convention Notes should adopt
+
+Pulse does not require a URL per sibling product. `App\Services\ProductApiResolver`
+derives one:
+
+1. `{PRODUCT}_API_ORIGIN`, if set;
+2. otherwise from the request host — a sandbox host gives
+   `{product}.gh.aicountly.com`, anything else `{product}.aicountly.com`.
+
+Its sandbox test is character-for-character the one Notes already ships in
+`web/src/auth/hostnames.ts` (`^[a-z0-9-]+\.gh\.aicountly\.com$` and
+`^gh-[a-z0-9-]+\.aicountly\.com$`), which came from books-react-app. The
+convention is settled; Notes just implements half of it.
+
+Notes currently makes `DRIVE_API_URL`, `CALENDAR_API_URL`, `CONTACTS_API_URL`
+and `CONNECT_API_URL` **required** before their flags can switch on
+(`Features::REQUIRES_ENV`). That was the right instinct — a flag on with nothing
+behind it produces controls that fail on click — but it is stricter than the
+ecosystem needs, and it makes every deployment carry four URLs that are already
+implied by its own hostname.
+
+The change: keep the flag as the explicit gate, make the URL optional, and derive
+the origin from the host when it is unset. `NOTES_DRIVE_ENABLED=true` alone then
+works in both environments, exactly as it does for every other product, while
+turning something on still remains a deliberate act.
+
 ## What to do next
 
 1. Point Notes' transcription adapter at `POST /api/speech/transcribe`, match the
