@@ -31,8 +31,35 @@ export interface SyncOperation {
   /** When this device made the change. The server keeps it for ordering. */
   client_stamp: string
   created_at: number
+  /**
+   * Strictly increasing send order.
+   *
+   * `created_at` cannot do this job: two operations enqueued in the same
+   * millisecond tie, and IndexedDB then breaks the tie by primary key — which
+   * is a random UUID. That is enough to send an update *before* the create of
+   * the note it edits, which 404s and loses the edit. A counter cannot tie.
+   */
+  seq: number
   attempts: number
   last_error?: string
+}
+
+/**
+ * The next send-order number.
+ *
+ * Seeded from what is already queued, so the order survives a reload with a
+ * queue still in it, and held in module scope afterwards so concurrent
+ * enqueues in one tick cannot read the same value.
+ */
+let nextSeq: number | null = null
+
+async function takeSeq(): Promise<number> {
+  if (nextSeq === null) {
+    const existing = await idb.getAll<SyncOperation>(STORE_QUEUE)
+    nextSeq = existing.reduce((max, op) => Math.max(max, op.seq ?? 0), 0) + 1
+  }
+
+  return nextSeq++
 }
 
 function newOperationId(): string {
@@ -57,11 +84,17 @@ export const syncQueue = {
     // Successive edits to one note collapse into the latest: replaying forty
     // autosaves of the same paragraph achieves nothing the last one does not,
     // and it turns a reconnect into a stampede.
+    let inheritedSeq: number | null = null
     if (operation === 'note.update') {
       const superseded = pending.find(
         (op) => op.entity_id === entityId && op.operation === 'note.update',
       )
-      if (superseded) await idb.delete(STORE_QUEUE, superseded.operation_id)
+      if (superseded) {
+        // Keep the original position. Moving the merged edit to the back of the
+        // queue would let a later operation on the same note overtake it.
+        inheritedSeq = superseded.seq
+        await idb.delete(STORE_QUEUE, superseded.operation_id)
+      }
     }
 
     const entry: SyncOperation = {
@@ -72,6 +105,7 @@ export const syncQueue = {
       payload,
       client_stamp: new Date().toISOString(),
       created_at: Date.now(),
+      seq: inheritedSeq ?? (await takeSeq()),
       attempts: 0,
     }
 
@@ -79,9 +113,10 @@ export const syncQueue = {
     return entry
   },
 
+  /** Oldest first, by send order rather than by clock. */
   async all(): Promise<SyncOperation[]> {
-    const operations = await idb.byIndex<SyncOperation>(STORE_QUEUE, 'created_at')
-    return operations.sort((a, b) => a.created_at - b.created_at)
+    const operations = await idb.getAll<SyncOperation>(STORE_QUEUE)
+    return operations.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))
   },
 
   async remove(operationId: string): Promise<void> {
@@ -102,5 +137,6 @@ export const syncQueue = {
 
   async clear(): Promise<void> {
     await idb.clear(STORE_QUEUE)
+    nextSeq = null
   },
 }
