@@ -137,25 +137,6 @@ final class ReminderService
         return array_map(fn (array $row): array => $this->present($row, withNote: true), $rows);
     }
 
-    /**
-     * The reminders on one note that belong to the caller.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function listForNote(Identity $identity, string $noteId): array
-    {
-        $this->permissions->requireNote($identity, $noteId, NotePermissionService::VIEW, columns: self::NOTE_COLUMNS);
-
-        $rows = Connection::select(
-            'SELECT * FROM note_reminders
-             WHERE note_id = :note_id AND user_id = :user AND deleted_at IS NULL
-             ORDER BY coalesce(snoozed_until, due_at), created_at',
-            ['note_id' => $noteId, 'user' => $identity->userId],
-        );
-
-        return array_map(fn (array $row): array => $this->present($row), $rows);
-    }
-
     // -----------------------------------------------------------------------
     // Writes
     // -----------------------------------------------------------------------
