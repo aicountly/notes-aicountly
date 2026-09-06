@@ -185,15 +185,33 @@ final class MeetingService
      * it. Not permission-filtered on purpose — it answers "is this id taken?",
      * and every caller checks the note it gets back before writing to it.
      */
-    public function noteIdForExternalId(string $column, string $externalId): ?string
-    {
+    public function noteIdForExternalId(
+        string $column,
+        string $externalId,
+        bool $includeTrashed = false,
+    ): ?string {
         if (!in_array($column, ['calendar_event_id', 'connect_meeting_id'], true)) {
             throw new \InvalidArgumentException('Unknown external id column.');
         }
 
+        // Two questions, one query, and they want different answers about a
+        // note in the Trash.
+        //
+        // *Routing* a recording skips it: a trashed note is not where anyone
+        // expects today's call to land.
+        //
+        // *Claiming* the id must not, and this is the subtle half. Trash is a
+        // soft delete — `NotesService::trash()` sets `deleted_at` and nothing
+        // else, and Restore is one click. If the guard cannot see the trashed
+        // holder, a second note claims the id, the first is restored, and two
+        // notes hold it with the recording going to whichever was edited last.
+        // Which is the race the exclusive claim exists to prevent, reached the
+        // long way round.
+        $liveOnly = $includeTrashed ? '' : ' AND n.deleted_at IS NULL';
+
         $row = Connection::selectOne(
             'SELECT m.note_id FROM note_meetings m
-             JOIN notes n ON n.id = m.note_id AND n.deleted_at IS NULL
+             JOIN notes n ON n.id = m.note_id' . $liveOnly . '
              WHERE m.' . $column . ' = :external_id
              ORDER BY m.updated_at DESC
              LIMIT 1',
@@ -225,7 +243,7 @@ final class MeetingService
         [$code, $message] = self::EXTERNAL_IDS[$column]
             ?? throw new \InvalidArgumentException('Unknown external id column.');
 
-        $holder = $this->noteIdForExternalId($column, $externalId);
+        $holder = $this->noteIdForExternalId($column, $externalId, includeTrashed: true);
         if ($holder === null || $holder === $noteId) {
             return;
         }

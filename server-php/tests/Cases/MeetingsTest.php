@@ -520,6 +520,67 @@ final class MeetingsTest extends TestCase
         );
     }
 
+    /**
+     * Trash is not a release of the id.
+     *
+     * Trash is a soft delete and Restore is one click, so a trashed note still
+     * holds its meeting id. A guard that could not see the trashed holder let
+     * a second note claim it — and then the first is restored, two notes hold
+     * one id, and the recording goes to whichever was edited last. Which is
+     * the race the exclusive claim exists to prevent, reached the long way
+     * round.
+     */
+    public function testATrashedNoteStillHoldsItsMeetingId(): void
+    {
+        $note = $this->note('Board call');
+        $this->alice->patch('/notes/' . $note['id'] . '/meeting', ['connect_meeting_id' => 'mtg-42']);
+        $this->assertSame(204, $this->alice->delete('/notes/' . $note['id'])['status']);
+
+        $second = $this->note('Another call');
+        $claim = $this->alice->patch('/notes/' . $second['id'] . '/meeting', [
+            'connect_meeting_id' => 'mtg-42',
+        ]);
+
+        $this->assertSame(409, $claim['status']);
+        $this->assertSame('CONNECT_MEETING_ALREADY_LINKED', $claim['body']['error']['code']);
+
+        // Restored, and still the one and only holder.
+        $this->alice->post('/notes/' . $note['id'] . '/restore');
+        $this->assertSame(
+            $note['id'],
+            (string) Connection::selectOne(
+                "SELECT note_id FROM note_meetings WHERE connect_meeting_id = 'mtg-42'",
+            )['note_id'],
+        );
+    }
+
+    /**
+     * And the database says so too.
+     *
+     * The service refuses a second claim on every path that writes the column,
+     * which is where the useful message lives. This is the floor underneath
+     * it: an application guard is one forgotten INSERT away from not being a
+     * guarantee, and what it guards is somebody else's private conversation.
+     */
+    public function testTheDatabaseItselfRefusesASecondHolder(): void
+    {
+        $note = $this->note('Board call');
+        $this->alice->patch('/notes/' . $note['id'] . '/meeting', ['connect_meeting_id' => 'mtg-99']);
+
+        $other = $this->note('Another call');
+        $threw = false;
+        try {
+            Connection::execute(
+                "INSERT INTO note_meetings (note_id, connect_meeting_id) VALUES (:id, 'mtg-99')",
+                ['id' => $other['id']],
+            );
+        } catch (\Throwable) {
+            $threw = true;
+        }
+
+        $this->assertTrue($threw, 'a unique index, not just a service that remembers to check');
+    }
+
     public function testANoteMayKeepItsOwnExternalIdAndTheOwnerIsToldWhereTheOtherIs(): void
     {
         $note = $this->note();
