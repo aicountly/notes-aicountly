@@ -25,11 +25,32 @@ Browser → server-php (CodeIgniter 4.7) → worker (Node/TS, HMAC-signed)
 
 ## What Notes can use today
 
-### `POST /api/speech/transcribe` — usable now
+### `POST /api/speech/transcribe` — the right shape, the wrong lifetime
 
-The one endpoint that fits a Notes use case directly, and the answer to the
-"where does transcription come from" question left open in
-`server-php/src/Domain/Jobs`.
+This looked like the answer to "where does transcription come from". It is not,
+and the reason is worth writing down because the shape check passes and the
+integration still cannot work.
+
+`SpeechController::transcribe` runs inside `withAuth()`, which requires a **live
+`ses_key`** validated against `my.aicountly.com`. Notes transcribes in a
+**background worker**, minutes or hours after the upload — by design, because an
+upload must not block on a model. By then the user's `ses_key` is long gone: it
+lives ~15 minutes, in memory only, and Notes deliberately never persists it (see
+[SECURITY.md](SECURITY.md)). There is no credential the worker could present.
+
+The three ways out, and why only the last one is right:
+
+| | |
+|---|---|
+| Transcribe synchronously during upload, while the key is live | Puts a model call in the upload request — the thing the job queue exists to prevent — and still hits the 10 MB ceiling |
+| Give Notes a stored service credential for Pulse | Breaks the model the whole suite runs on: forward the caller's key so the sibling enforces *its* permissions, never a shared token |
+| Pulse adds a signed service-to-service route | Pulse already does exactly this for its own worker (`/api/internal/worker/*`, HMAC with `PULSE_WORKER_SECRET`). The same shape, opened to a sibling, is what background transcription needs |
+
+So transcription stays on Notes' own `RemoteEngine` adapter with a configured
+endpoint, and `NOTES_TRANSCRIPTION_ENABLED` stays off until one exists. The job
+is marked `skipped`, not failed, and is not retried.
+
+The endpoint's contract, for whenever the auth question is settled:
 
 | | |
 |---|---|
@@ -39,16 +60,21 @@ The one endpoint that fits a Notes use case directly, and the answer to the
 | Success | `{"status": 1, "data": {"text": "…"}}` |
 | Failure | `{"status": 0, "message": "…", "detail"?: "…"}` — 503 unconfigured, 400 unreadable, 413 too large, 502 upstream |
 
-Two things to carry into the Notes adapter:
+Two things to carry into the Notes adapter if it is ever reachable:
 
 - **The envelope is `status: 1`, not `success: true`.** That is the AICOUNTLY
   portal convention, which `Portal::validateSesKey` already speaks; Notes' own
   `{success, data}` envelope is for its own clients and must not be assumed of
-  a sibling.
+  a sibling. (`RemoteEngine` already unwraps a `data` object, so this half
+  happens to line up.)
 - **10 MB is a chat-composer limit, not a meeting limit.** It suits a voice
   note; an hour of meeting audio will not fit and needs chunking or a different
   provider. Treating this as general-purpose transcription would fail on exactly
   the recordings meeting notes exist for.
+
+**The lesson worth keeping:** matching request and response shapes is not the
+same as an integration working. The auth lifetime is part of the contract, and
+it is the part that does not show up in a route map.
 
 ## What Notes cannot use as designed
 

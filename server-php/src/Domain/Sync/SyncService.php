@@ -62,7 +62,18 @@ final class SyncService
 
     /** The zero UUID, so a plain `?since=<iso>` sorts before every real id. */
     private const MIN_UUID = '00000000-0000-0000-0000-000000000000';
-    private const EPOCH = '1970-01-01T00:00:00+00:00';
+    private const EPOCH = '1970-01-01T00:00:00.000000+00:00';
+
+    /**
+     * Microseconds, not milliseconds.
+     *
+     * `RFC3339_EXTENDED` stops at three decimal places, and Postgres keeps six.
+     * A cursor rounded down by a few microseconds sits *before* the row it was
+     * taken from, so that row comes back on every page — which is a client
+     * re-downloading its own last note forever, and a page cap that never
+     * clears.
+     */
+    private const TIMESTAMP_FORMAT = 'Y-m-d\\TH:i:s.uP';
 
     /**
      * The same column list `GET /notes` uses, and for the same reason: a sync
@@ -542,7 +553,7 @@ final class SyncService
         try {
             return (new \DateTimeImmutable($value))
                 ->setTimezone(new \DateTimeZone('UTC'))
-                ->format(\DateTimeInterface::RFC3339_EXTENDED);
+                ->format(self::TIMESTAMP_FORMAT);
         } catch (\Throwable) {
             return null;
         }

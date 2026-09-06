@@ -17,6 +17,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Icon } from '../../../shared/ui/Icon'
 import { Badge, Button, EmptyState, Skeleton } from '../../../shared/ui/primitives'
 import { useAppConfig } from '../../../app/AppConfigProvider'
+import { useImageUploader } from '../../attachments/hooks/useAttachments'
 import { NoteEditor } from '../../editor/NoteEditor'
 import { useCreateNote, useNote, useNoteFlag } from '../hooks/useNotes'
 import { NoteInfoPanel } from './NoteInfoPanel'
@@ -46,6 +47,12 @@ export function NoteEditorPane({
   const create = useCreateNote()
   const flag = useNoteFlag()
   const note = useNote(noteId && noteId !== 'new' ? noteId : undefined)
+
+  // Pasting or dropping an image into the editor stores it as an attachment.
+  // The uploader is resolved here rather than inside the editor because the
+  // pane is what knows which note is open; the editor stays a document
+  // component that neither fetches nor uploads.
+  const uploadImage = useImageUploader(note.data?.id)
 
   const [infoOpen, setInfoOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -232,7 +239,7 @@ export function NoteEditorPane({
 
       <div className="editor__pane-body">
         <div className="editor__pane-main">
-          <NoteEditor note={open} />
+          <NoteEditor note={open} uploadImage={uploadImage} />
         </div>
 
         {infoOpen ? <NoteInfoPanel note={open} onClose={() => setInfoOpen(false)} /> : null}

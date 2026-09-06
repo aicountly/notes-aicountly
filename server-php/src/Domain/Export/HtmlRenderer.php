@@ -186,12 +186,30 @@ final class HtmlRenderer
             $cells = '';
             foreach (self::children($row) as $cell) {
                 $tag = (string) ($cell['type'] ?? '') === 'tableHeader' ? 'th' : 'td';
-                $cells .= '<' . $tag . '>' . trim($this->blocks($cell, $depth + 1)) . '</' . $tag . '>';
+                $cells .= '<' . $tag . '>' . $this->cell($cell, $depth) . '</' . $tag . '>';
             }
             $rows .= '<tr>' . $cells . "</tr>\n";
         }
 
         return $rows === '' ? '' : "<table>\n" . $rows . "</table>\n";
+    }
+
+    /**
+     * The contents of one cell.
+     *
+     * A cell holds block content, but the overwhelmingly common cell is a
+     * single paragraph — wrapping that in `<p>` gives every table a row of
+     * paragraph margins and nothing else, so the inline content goes in
+     * directly and anything richer keeps its blocks.
+     */
+    private function cell(array $cell, int $depth): string
+    {
+        $children = self::children($cell);
+        if (count($children) === 1 && (string) ($children[0]['type'] ?? '') === 'paragraph') {
+            return $this->inline(self::children($children[0]));
+        }
+
+        return trim($this->blocks($cell, $depth + 1));
     }
 
     private function callout(array $node, int $depth): string
