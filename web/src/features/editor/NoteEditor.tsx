@@ -112,6 +112,7 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
     null,
   )
 
+  const titleField = useRef<HTMLTextAreaElement>(null)
   const slashMenuId = useId()
   const mentionMenuId = useId()
   const titleFieldId = useId()
@@ -198,21 +199,32 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
     return people.filter((person) => person.label.toLowerCase().includes(needle)).slice(0, 8)
   })
 
-  const initialContent = useMemo(() => withBlockIds(note.document), [note.id])
+  /**
+   * Everything below is memoised with an empty dependency list on purpose.
+   *
+   * `useEditor` compares its options by identity on every render and calls
+   * `setOptions` when any of them changed — which, with an extension array
+   * rebuilt each render, would mean re-applying the whole ProseMirror view
+   * while someone is typing into it. Nothing here needs to change after
+   * creation: the editable flag is applied through `setEditable`, the document
+   * through the effect below, and every callback reads a ref.
+   */
+  const initialContent = useMemo(() => withBlockIds(note.document), [])
 
-  const editor = useEditor({
-    immediatelyRender: false,
-    content: initialContent,
-    editable: canEdit,
-    editorProps: {
+  const editorProps = useMemo(
+    () => ({
       attributes: {
         class: 'note-editor__surface',
         role: 'textbox',
         'aria-multiline': 'true',
         'aria-label': 'Note body',
       },
-    },
-    extensions: [
+    }),
+    [],
+  )
+
+  const extensions = useMemo(
+    () => [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
         // Link and Underline ship inside StarterKit in v3; adding the separate
@@ -265,6 +277,15 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
         onError: setPasteError,
       }),
     ],
+    [slashBridge, mentionBridge],
+  )
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    content: initialContent,
+    editable: canEdit,
+    editorProps,
+    extensions,
     onUpdate: ({ editor: instance }) => {
       if (applyingContent.current) return
       autosaveRef.current.schedule({ document: toStorableDocument(instance.getJSON()) })
@@ -309,6 +330,16 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
   useEffect(() => {
     editor?.setEditable(canEdit)
   }, [editor, canEdit])
+
+  // The title grows with what is typed into it — including a long title that
+  // arrived from the server, which is why this is an effect and not an
+  // onChange handler.
+  useEffect(() => {
+    const field = titleField.current
+    if (!field) return
+    field.style.height = 'auto'
+    field.style.height = `${field.scrollHeight}px`
+  }, [title])
 
   const slashMenu = useSuggestionMenu(slashBridge)
   const mentionMenu = useSuggestionMenu(mentionBridge)
@@ -385,6 +416,7 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
           Note title
         </label>
         <textarea
+          ref={titleField}
           id={titleFieldId}
           className="editor__title"
           rows={1}
@@ -392,12 +424,7 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
           value={title}
           readOnly={!canEdit}
           spellCheck
-          onChange={(event) => {
-            onTitleChange(event.target.value)
-            const field = event.target
-            field.style.height = 'auto'
-            field.style.height = `${field.scrollHeight}px`
-          }}
+          onChange={(event) => onTitleChange(event.target.value)}
           onBlur={() => void autosave.flush()}
           onKeyDown={(event) => {
             // A title is one line; Enter belongs to the body.

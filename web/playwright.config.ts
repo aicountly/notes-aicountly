@@ -20,6 +20,18 @@ import { defineConfig, devices } from '@playwright/test'
  * is the portal handshake itself, which docs/auth/ describes how to verify by
  * hand in each environment.
  */
+/**
+ * Use a Chromium that is already on the machine when one is provided.
+ *
+ * CI images and sandboxes often ship a browser at a fixed path whose build
+ * number does not match the one this @playwright/test expects. Without this,
+ * the run fails with "Executable doesn't exist" and the only suggested fix is
+ * to download several hundred megabytes that are already present. Unset, this
+ * is empty and Playwright resolves its own browser as usual.
+ */
+const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_PATH ?? ''
+const launchOptions = chromiumPath ? { executablePath: chromiumPath } : {}
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -35,8 +47,11 @@ export default defineConfig({
   },
 
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } },
-    { name: 'mobile', use: { ...devices['Pixel 7'] } },
+    {
+      name: 'desktop',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, launchOptions },
+    },
+    { name: 'mobile', use: { ...devices['Pixel 7'], launchOptions } },
   ],
 
   webServer: {

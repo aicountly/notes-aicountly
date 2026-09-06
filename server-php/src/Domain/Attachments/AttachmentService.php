@@ -262,7 +262,9 @@ final class AttachmentService
             ['id' => $attachmentId],
         );
         if ($existing !== null) {
-            if ((string) $existing['note_id'] !== $noteId) {
+            // A detached attachment does not come back by re-sending its id
+            // either: the object behind it has been queued for deletion.
+            if ((string) $existing['note_id'] !== $noteId || $existing['deleted_at'] !== null) {
                 throw ApiException::validation(['id' => 'That attachment id is already in use.']);
             }
 

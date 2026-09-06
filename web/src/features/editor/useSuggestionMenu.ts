@@ -46,10 +46,10 @@ export function useSuggestionMenu(bridge: SuggestionBridge): SuggestionMenuContr
         // two arrow presses inside a single React batch must move two rows,
         // not the same row twice.
         case 'ArrowDown':
-          setActiveIndex((current) => (current + 1) % count)
+          setActiveIndex((previous) => (previous + 1) % count)
           return true
         case 'ArrowUp':
-          setActiveIndex((current) => (current - 1 + count) % count)
+          setActiveIndex((previous) => (previous - 1 + count) % count)
           return true
         case 'Home':
           setActiveIndex(0)

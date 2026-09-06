@@ -83,9 +83,17 @@ same-origin.
 | `npm run typecheck` | Type-check only |
 | `npm run test` | Component and hook tests (vitest) |
 | `npm run e2e` | Browser tests (Playwright, against a stubbed API) |
+| `npm run e2e -- --project=desktop` | Just the desktop viewport |
 | `php tests/run.php` | API tests, against a real PostgreSQL database |
 | `php bin/migrate.php status` | Which migrations are applied |
 | `php bin/worker.php --once` | Run queued background jobs once (cron-friendly) |
+
+If the machine already has a Chromium that Playwright did not install — most CI
+images and sandboxes do — point at it instead of downloading another copy:
+
+```bash
+PLAYWRIGHT_CHROMIUM_PATH=/path/to/chrome npm run e2e
+```
 
 ### Background jobs
 

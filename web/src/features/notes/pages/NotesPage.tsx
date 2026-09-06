@@ -155,6 +155,9 @@ function useNotesFeed({ path, query, cursorPaged, offlineFallback }: FeedOptions
     queries: paging.cursors.map((cursor) => ({
       queryKey: queryKeys.notes.list({ ...query, path, limit: paging.limit, cursor }),
       queryFn: () => fetchPage(path, { ...query, limit: paging.limit }, cursor, offlineFallback && cursor === null),
+      // Growing the page size changes the key. Keeping the previous rows on
+      // screen turns "load more" into an append rather than a full reload.
+      placeholderData: (previous: FeedPage | undefined) => previous,
     })),
   })
 
@@ -181,7 +184,8 @@ function useNotesFeed({ path, query, cursorPaged, offlineFallback }: FeedOptions
     canLoadMore,
     fromCache: Boolean(results[0]?.data?.fromCache),
     isPending: results[0]?.isPending ?? true,
-    isLoadingMore: results.length > 1 && Boolean(last?.isPending),
+    isLoadingMore:
+      (results.length > 1 && Boolean(last?.isPending)) || Boolean(last?.isPlaceholderData),
     error: failure instanceof ApiError ? failure : null,
     refetch: () => {
       for (const result of results) void result.refetch()

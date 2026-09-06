@@ -51,6 +51,12 @@ ul.notes-list { list-style: none; margin: 0; padding: 0; }
 .note-card__meta .note-menu,
 .note-row .note-menu { margin-left: auto; }
 
+/* On a touch device there is no hover, so a hover-only pin is an invisible
+   control that still takes taps. It stays visible instead. */
+@media (hover: none) {
+  .note-card__pin { opacity: 1; }
+}
+
 .note-card__badge {
   display: inline-flex;
   align-items: center;
@@ -309,6 +315,8 @@ ul.notes-list { list-style: none; margin: 0; padding: 0; }
 .today-item__when--overdue { color: var(--notes-danger); font-weight: 600; }
 
 /* --- Quick capture -------------------------------------------------------- */
+
+.quick-capture .notes-notice { margin: 0 var(--notes-space-4) var(--notes-space-3); }
 
 .quick-capture__hint {
   font-size: var(--notes-text-xs);

@@ -105,8 +105,12 @@ export function HomePage() {
   const sharedNotes = shared.data?.notes ?? []
 
   const hrefFor = (note: NoteSummary) => `/notes/${note.id}`
+  // Only once every section has answered: an empty state that appears for a
+  // moment and is then replaced by content is worse than a slower page.
   const nothingAtAll =
     !recent.isPending &&
+    !pinned.isPending &&
+    !shared.isPending &&
     !recent.isError &&
     pinnedNotes.length === 0 &&
     continueEditing.length === 0 &&
