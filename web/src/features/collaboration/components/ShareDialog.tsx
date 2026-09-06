@@ -130,7 +130,10 @@ export function ShareDialog({ note, open, onClose }: ShareDialogProps) {
       }
     >
       <div className="org-form">
-        {error ? <ErrorNotice error={error} /> : null}
+        {/* A failed write is dismissible: there is nothing to retry — the form
+            below is the retry — and without this the sentence sits at the top
+            of the dialog for as long as it stays open. */}
+        {error ? <ErrorNotice error={error} onDismiss={() => setError(null)} /> : null}
 
         <div className="collab-link-row">
           <Icon name="link" size={15} />
@@ -166,7 +169,10 @@ export function ShareDialog({ note, open, onClose }: ShareDialogProps) {
                 className="org-input"
                 value={person}
                 autoComplete="off"
-                disabled={busy}
+                // Only the invite's own request disables the field. Disabling
+                // it for a role change elsewhere in the dialog would blur it
+                // mid-address, because a browser blurs what it disables.
+                disabled={addMember.isPending}
                 data-autofocus=""
                 aria-invalid={fieldErrors.user_id ? true : undefined}
                 aria-describedby={fieldErrors.user_id ? `${personId}-error` : undefined}
@@ -187,7 +193,7 @@ export function ShareDialog({ note, open, onClose }: ShareDialogProps) {
                 id={roleId}
                 className="org-select"
                 value={role}
-                disabled={busy}
+                disabled={addMember.isPending}
                 aria-describedby={rolesId}
                 onChange={(event) => setRole(event.target.value as GrantableRole)}
               >
@@ -206,12 +212,16 @@ export function ShareDialog({ note, open, onClose }: ShareDialogProps) {
               </ul>
             </div>
 
+            {/* `busy` as well as the field: invite() refuses to run while
+                another sharing write is in flight, and a button that is
+                clickable while the click does nothing is the same bug as one
+                wired to nothing at all. */}
             <Button
               type="submit"
               variant="primary"
               icon="plus"
               loading={addMember.isPending}
-              disabled={person.trim() === ''}
+              disabled={person.trim() === '' || busy}
             >
               Share
             </Button>

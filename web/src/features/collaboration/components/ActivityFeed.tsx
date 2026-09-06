@@ -26,6 +26,17 @@ import '../collaboration.css'
 /** How far apart two acts can be and still read as one. */
 const GROUP_WINDOW_MS = 10 * 60_000
 
+/**
+ * The most rows one request can return.
+ *
+ * `ActivityController::index` clamps `limit` to 200 and computes `has_more`
+ * against the note's whole trail, so asking for 225 returns the same 200 rows
+ * with `has_more` still true. Without this cap "Show earlier activity" would
+ * stay on screen past that point and stop changing anything — a button that
+ * lies. Past the cap the panel says so instead.
+ */
+const MAX_ENTRIES = 200
+
 const ROLE_NOUN: Record<NoteRole, string> = {
   owner: 'the owner',
   editor: 'an editor',
@@ -226,17 +237,22 @@ export function ActivityFeed({ noteId, pageSize = 25 }: ActivityFeedProps) {
             ))}
           </ul>
 
-          {activity.data.hasMore ? (
+          {activity.data.hasMore && limit < MAX_ENTRIES ? (
             <div className="collab-actions">
               <Button
                 size="sm"
                 icon="chevron-down"
                 loading={activity.isFetching}
-                onClick={() => setLimit((current) => current + pageSize)}
+                onClick={() => setLimit((current) => Math.min(current + pageSize, MAX_ENTRIES))}
               >
                 Show earlier activity
               </Button>
             </div>
+          ) : activity.data.hasMore ? (
+            <p className="collab-note collab-note--muted">
+              Showing the {MAX_ENTRIES} most recent entries. This note has more history than the
+              panel lists.
+            </p>
           ) : null}
         </>
       )}

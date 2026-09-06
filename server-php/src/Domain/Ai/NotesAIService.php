@@ -124,7 +124,10 @@ final class NotesAIService
         // read it, and the answer cites it.
         $citations = [];
         $noteId = $input['note_id'] ?? null;
-        if (is_string($noteId) && $noteId !== '') {
+        if ($noteId !== null && $noteId !== '') {
+            // Anything but a well-formed id is refused rather than ignored:
+            // silently dropping `note_id: 12345` would answer without the
+            // permission check the caller asked for, and without the citation.
             if (!Uuid::isValid($noteId)) {
                 throw ApiException::validation(['note_id' => 'That is not a note id.']);
             }
@@ -263,11 +266,14 @@ final class NotesAIService
 
         $scope = [];
         $notebookId = $input['notebook_id'] ?? null;
-        if (is_string($notebookId) && $notebookId !== '') {
+        if ($notebookId !== null && $notebookId !== '') {
+            // A scope that cannot be read is refused, never dropped. Ignoring
+            // it would answer the question from everything the caller can read
+            // while they believe they asked about one notebook.
             if (!Uuid::isValid($notebookId)) {
                 throw ApiException::validation(['notebook_id' => 'That is not a notebook id.']);
             }
-            $scope['notebook_id'] = strtolower($notebookId);
+            $scope['notebook_id'] = strtolower((string) $notebookId);
         }
 
         $blocks = $this->search->retrieveForAi($identity, $question, self::CONTEXT_BLOCKS, $scope);
@@ -313,6 +319,14 @@ final class NotesAIService
             $isQuestion,
         )->withContext($items);
 
+        // `withContext()` drops a block whose text is empty once control
+        // characters are stripped, and any block past the context budget —
+        // which renumbers every block after it. Citations are held one per
+        // *item*, so they are realigned onto what was actually sent before
+        // anything resolves a "[2]" against them. Without this an answer can
+        // cite a note whose text the model never saw.
+        $citations = self::alignToBlocks($citations, $bundle->contextSources());
+
         if ($isQuestion && !$bundle->hasContext()) {
             // Nothing the caller may read matched. Asking anyway would produce a
             // confident answer about notes the model never saw — which is the
@@ -333,6 +347,27 @@ final class NotesAIService
         [$cited, $grounded] = self::ground($isQuestion, $citations, $result);
 
         return self::answer($action, $result->text, self::shape($action['output'], $result), $cited, $grounded, $result->model);
+    }
+
+    /**
+     * Citations, renumbered onto the blocks the bundle really carries.
+     *
+     * @param array<int, Citation> $citations One per item handed to the bundle.
+     * @param array<int, int> $sources Source index per block, in block order.
+     * @return array<int, Citation>
+     */
+    private static function alignToBlocks(array $citations, array $sources): array
+    {
+        $ordered = array_values($citations);
+        $aligned = [];
+
+        foreach ($sources as $source) {
+            if (isset($ordered[$source])) {
+                $aligned[] = $ordered[$source];
+            }
+        }
+
+        return $aligned;
     }
 
     /**
@@ -409,6 +444,14 @@ final class NotesAIService
     private function findRelated(Identity $identity, array $note, array $action): array
     {
         $body = self::noteText($note);
+        // The action's instruction says block 1 *is* the note being read, and
+        // an empty block is dropped rather than sent — so a note with nothing
+        // in it would leave the model comparing candidates against a block that
+        // is not there. Refused here, as every other note action refuses it.
+        if ($body === '') {
+            throw ApiException::validation(['note_id' => 'There is nothing in this note to match against.']);
+        }
+
         $query = self::relatedQuery($note['title'] === null ? '' : (string) $note['title'], $body);
         if ($query === '') {
             throw ApiException::validation(['note_id' => 'There is nothing in this note to match against.']);
@@ -509,14 +552,25 @@ final class NotesAIService
         $this->permissions->requireNote($identity, $noteId, NotePermissionService::EDIT, columns: 'n.id');
 
         if ($action['id'] === 'extract_actions' || $action['id'] === 'to_checklist') {
-            $saved = [];
-            foreach (array_slice((array) ($answer['data']['items'] ?? []), 0, self::MAX_EXTRACTED_ITEMS) as $item) {
-                $saved[] = $this->actions->create($identity, $noteId, [
-                    'text' => $item['text'] ?? '',
-                    'due_at' => $item['due_at'] ?? null,
-                    'priority' => $item['priority'] ?? null,
-                ], 'pulse');
-            }
+            $items = array_slice((array) ($answer['data']['items'] ?? []), 0, self::MAX_EXTRACTED_ITEMS);
+
+            // One transaction, because a model's list is saved as a list. A
+            // row that the actions service refuses used to leave the items
+            // before it written and the ones after it lost, with no way for the
+            // caller to tell which half they got.
+            $saved = Connection::transaction(function () use ($identity, $noteId, $items): array {
+                $created = [];
+                foreach ($items as $item) {
+                    $created[] = $this->actions->create($identity, $noteId, [
+                        'text' => $item['text'] ?? '',
+                        'due_at' => $item['due_at'] ?? null,
+                        'priority' => $item['priority'] ?? null,
+                    ], 'pulse');
+                }
+
+                return $created;
+            });
+
             $answer['data']['saved_actions'] = $saved;
             $answer['saved'] = $saved !== [];
 
@@ -748,7 +802,7 @@ final class NotesAIService
 
             $items[] = [
                 'text' => Str::limit($itemText, 2000),
-                'due_at' => self::optionalString($item['due_at'] ?? $item['due'] ?? null, 40),
+                'due_at' => self::dueDate($item['due_at'] ?? $item['due'] ?? null),
                 'assignee' => self::optionalString($item['assignee'] ?? null, 120),
                 'priority' => self::optionalString($item['priority'] ?? null, 20),
             ];
@@ -812,6 +866,38 @@ final class NotesAIService
         $decoded = json_decode(substr($candidate, 0, $end + 1), true);
 
         return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * A due date the model suggested, kept only if it is one.
+     *
+     * The prompt asks for `YYYY-MM-DD`; models also answer "TBD", "end of
+     * quarter" and "whenever we get to it". Those are not dates, and passing
+     * them on has two costs: the client shows a due date that is not one, and
+     * saving the list fails with a 422 about a `due_at` field the caller never
+     * sent. A date that does not parse is dropped — the item is still a real
+     * action, it just has no date on it — and the text the model wrote is
+     * already in the item, so nothing is lost.
+     *
+     * The range check matches what the actions service will accept, so what is
+     * suggested here is always something that can be saved.
+     */
+    private static function dueDate(mixed $value): ?string
+    {
+        $raw = self::optionalString($value, 40);
+        if ($raw === null) {
+            return null;
+        }
+
+        try {
+            $moment = new \DateTimeImmutable($raw);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        $year = (int) $moment->format('Y');
+
+        return $year < 1 || $year > 9999 ? null : $raw;
     }
 
     private static function optionalString(mixed $value, int $max): ?string

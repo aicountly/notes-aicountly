@@ -50,8 +50,17 @@
   font-size: var(--notes-text-sm);
 }
 
-.att-panel__error { background: var(--notes-danger-soft); color: var(--notes-danger); }
+.att-panel__error { background: var(--notes-danger-soft); color: var(--notes-danger); flex-wrap: wrap; }
 .att-panel__notice { background: var(--notes-info-soft); color: var(--notes-info); flex-wrap: wrap; }
+
+/* The sentence takes the room; the control that answers it sits at the end. */
+.att-panel__error > span,
+.att-panel__notice > span { flex: 1 1 12rem; min-width: 0; }
+
+/* Inside a coloured strip a ghost button must not fall back to the app's grey,
+   which does not carry enough contrast on danger-soft or info-soft. */
+.att-panel__error .btn--ghost,
+.att-panel__notice .btn--ghost { color: inherit; }
 
 /* --- Drop zone ---------------------------------------------------------- */
 
@@ -133,15 +142,12 @@
 .att-block__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 
 .att-block__name {
+  margin: 0;
   font-size: var(--notes-text-sm);
   font-weight: 600;
   color: var(--notes-text-primary);
-  text-decoration: none;
   overflow-wrap: anywhere;
 }
-
-.att-block__name:hover { color: var(--notes-primary); text-decoration: underline; }
-.att-block__name--plain { margin: 0; }
 
 .att-block__meta {
   margin: 0;
@@ -157,9 +163,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-
-/* An anchor borrowing the button shape still needs the underline removed. */
-.att-block__download { text-decoration: none; }
 
 /* --- State line --------------------------------------------------------- */
 
@@ -221,7 +224,14 @@
 .att-preview--pdf { padding: var(--notes-space-2); }
 .att-preview--pdf object { display: block; width: 100%; height: 460px; border: 0; }
 
+/* The bytes are fetched with the session attached rather than by the <img>
+   itself, so a preview has a real loading step and needs somewhere to sit. */
+.att-preview__loading { display: block; line-height: 0; }
+
 .att-preview__fallback {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
   margin: 0;
   padding: var(--notes-space-4);
   font-size: var(--notes-text-sm);

@@ -104,7 +104,14 @@ final class SmartFolderService
             ],
         );
 
-        return array_map(fn (array $row): array => $this->present($identity, $row), $rows);
+        // One count query for the whole page, not one per folder: see
+        // {@see self::countsFor()}.
+        $counts = $this->countsFor($identity, $rows);
+
+        return array_map(
+            fn (array $row): array => $this->present($identity, $row, $counts[(string) $row['id']] ?? null),
+            $rows,
+        );
     }
 
     /**
@@ -155,27 +162,37 @@ final class SmartFolderService
 
         $this->requireRoom($identity);
 
+        // Every field is validated before anything is written. Validating
+        // `position` after the INSERT — where it used to live — answered 422
+        // and left the folder behind, so the client showed an error beside a
+        // folder that had in fact been created, and the row still counted
+        // against the ceiling.
         $name = $this->name($input['name'] ?? null);
         $rules = $this->validRules($input['rules'] ?? self::EMPTY_RULES);
+        $icon = $this->icon($input['icon'] ?? null);
+        $color = $this->color($input['color'] ?? null);
+        $index = array_key_exists('position', $input) ? $this->position($input['position']) : null;
 
-        Connection::execute(
-            'INSERT INTO smart_folders (id, tenant_id, owner_user_id, name, icon, color, rules, position)
-             VALUES (:id, :tenant_id, :owner, :name, :icon, :color, :rules::jsonb, :position)',
-            [
-                'id' => $folderId,
-                'tenant_id' => $identity->tenantId,
-                'owner' => $identity->userId,
-                'name' => $name,
-                'icon' => $this->icon($input['icon'] ?? null),
-                'color' => $this->color($input['color'] ?? null),
-                'rules' => (string) json_encode($rules, JSON_UNESCAPED_SLASHES),
-                'position' => $this->nextPosition($identity),
-            ],
-        );
+        Connection::transaction(function () use ($identity, $folderId, $name, $rules, $icon, $color, $index): void {
+            Connection::execute(
+                'INSERT INTO smart_folders (id, tenant_id, owner_user_id, name, icon, color, rules, position)
+                 VALUES (:id, :tenant_id, :owner, :name, :icon, :color, :rules::jsonb, :position)',
+                [
+                    'id' => $folderId,
+                    'tenant_id' => $identity->tenantId,
+                    'owner' => $identity->userId,
+                    'name' => $name,
+                    'icon' => $icon,
+                    'color' => $color,
+                    'rules' => (string) json_encode($rules, JSON_UNESCAPED_SLASHES),
+                    'position' => $this->nextPosition($identity),
+                ],
+            );
 
-        if (array_key_exists('position', $input)) {
-            $this->reposition($identity, $folderId, $this->position($input['position']));
-        }
+            if ($index !== null) {
+                $this->reposition($identity, $folderId, $index);
+            }
+        });
 
         return $this->present($identity, $this->requireFolder($identity, $folderId));
     }
@@ -194,6 +211,11 @@ final class SmartFolderService
     {
         $this->requireFolder($identity, $folderId);
 
+        // Every field is validated before any of them is written, and the write
+        // is one transaction. An edit is refused whole or applied whole: a
+        // `position` that failed validation used to answer 422 *after* the
+        // rename had already been committed, which is the same half-applied
+        // edit the rules path is careful to avoid.
         $updates = [];
         $bindings = ['id' => $folderId, 'owner' => $identity->userId];
 
@@ -214,17 +236,23 @@ final class SmartFolderService
             $bindings['rules'] = (string) json_encode($this->validRules($input['rules']), JSON_UNESCAPED_SLASHES);
         }
 
-        if ($updates !== []) {
-            $updates[] = 'updated_at = now()';
-            Connection::execute(
-                'UPDATE smart_folders SET ' . implode(', ', $updates) . '
-                 WHERE id = :id AND owner_user_id = :owner AND deleted_at IS NULL',
-                $bindings,
-            );
-        }
+        $index = array_key_exists('position', $input) ? $this->position($input['position']) : null;
 
-        if (array_key_exists('position', $input)) {
-            $this->reposition($identity, $folderId, $this->position($input['position']));
+        if ($updates !== [] || $index !== null) {
+            Connection::transaction(function () use ($identity, $folderId, $updates, $bindings, $index): void {
+                if ($updates !== []) {
+                    $updates[] = 'updated_at = now()';
+                    Connection::execute(
+                        'UPDATE smart_folders SET ' . implode(', ', $updates) . '
+                         WHERE id = :id AND owner_user_id = :owner AND deleted_at IS NULL',
+                        $bindings,
+                    );
+                }
+
+                if ($index !== null) {
+                    $this->reposition($identity, $folderId, $index);
+                }
+            });
         }
 
         return $this->present($identity, $this->requireFolder($identity, $folderId));
@@ -270,6 +298,24 @@ final class SmartFolderService
             throw ApiException::validation(['rules' => 'Rules must be an object.']);
         }
 
+        // A rule tree is an object with `match` and `conditions`. Anything else
+        // shaped like an array — a JSON list, a half-serialised form — is not a
+        // tree that happens to be empty, and reading it as one stores a folder
+        // that quietly matches the entire library under a name the user chose
+        // to mean something much narrower. `[]` is exempt: PHP cannot tell it
+        // from `{}`, and an empty object is a legitimate "no rules".
+        if ($value !== [] && !array_key_exists('match', $value) && !array_key_exists('conditions', $value)) {
+            throw ApiException::validation(['rules' => 'Rules need a `match` and a list of `conditions`.']);
+        }
+
+        $match = $value['match'] ?? 'all';
+        if (!is_scalar($match)) {
+            // Refused rather than folded to the default, for the same reason
+            // `match: "sometimes"` is refused: the folder would go on to match
+            // on a rule the user did not choose.
+            throw ApiException::validation(['rules' => '`match` must be "all" or "any".']);
+        }
+
         $conditions = $value['conditions'] ?? [];
         if (!is_array($conditions)) {
             throw ApiException::validation(['rules' => '`conditions` must be a list of rules.']);
@@ -293,7 +339,7 @@ final class SmartFolderService
         }
 
         $rules = [
-            'match' => strtolower((string) (is_scalar($value['match'] ?? null) ? $value['match'] : 'all')),
+            'match' => strtolower((string) $match),
             'conditions' => $normalised,
         ];
 
@@ -383,7 +429,7 @@ final class SmartFolderService
     // -----------------------------------------------------------------------
 
     /**
-     * How many notes a folder matches, counted only as far as it is worth.
+     * How many notes each folder matches, counted only as far as it is worth.
      *
      * The sidebar renders this badge next to every folder on every page load.
      * An exact number means visiting every matching row, and a rule as ordinary
@@ -394,46 +440,97 @@ final class SmartFolderService
      * "500+" rather than paying for a digit nobody reads. The folder itself
      * still lists every match, page by page.
      *
-     * @param array{match: string, conditions: array<int, array<string, mixed>>} $rules
-     * @return array{count: int|null, capped: bool, valid: bool}
+     * The whole page is counted in **one** statement. The per-folder half of
+     * the work is the filter; the expensive half is {@see NoteAccess::cte()},
+     * which walks every notebook grant the caller holds — and running that once
+     * per folder made the sidebar cost grow with the number of folders *on top
+     * of* the size of the library. Here the access CTE is evaluated once and
+     * each folder is counted against it.
+     *
+     * Access is still decided by that CTE and nothing else, exactly as it is
+     * for a single folder: batching changes how many times the gate is
+     * evaluated, never who passes it.
+     *
+     * @param array<int, array<string, mixed>> $rows Folder rows, as stored.
+     * @return array<string, array{count: int|null, capped: bool, valid: bool}> Keyed by folder id.
      */
-    private function countFor(Identity $identity, array $rules): array
+    private function countsFor(Identity $identity, array $rows): array
     {
-        try {
-            $query = $this->compile($rules);
-        } catch (ApiException) {
-            // One folder saved against an older rule vocabulary must not take
-            // the whole sidebar down with it.
-            return ['count' => null, 'capped' => false, 'valid' => false];
+        $cap = $this->countCap();
+        $counts = [];
+        $arms = [];
+        $bindings = [
+            'auth_user' => $identity->userId,
+            'auth_tenant' => $identity->tenantId,
+            'count_cap' => $cap,
+        ];
+
+        foreach (array_values($rows) as $index => $row) {
+            $id = (string) $row['id'];
+            $rules = $this->rulesOf($row);
+
+            try {
+                $query = $this->compile($rules);
+            } catch (ApiException) {
+                // One folder saved against an older rule vocabulary must not
+                // take the whole sidebar down with it: it drops out of the
+                // batch and reports that it cannot be run.
+                $counts[$id] = ['count' => null, 'capped' => false, 'valid' => false];
+                continue;
+            }
+
+            $where = $this->scope($rules, '') === 'all'
+                ? 'n.deleted_at IS NULL'
+                : 'n.deleted_at IS NULL AND NOT n.is_archived';
+
+            // Each folder's filter numbers its placeholders from `:f0`, so the
+            // arms would collide. Only the *names* are rewritten here — every
+            // value still travels as a bound parameter, and the filter SQL is
+            // still the builder's, never a string assembled from user input.
+            $prefix = 'q' . $index . '_';
+            $filter = preg_replace('/:f(\d+)/', ':' . $prefix . 'f$1', $query->sql());
+            if ($filter === null) {
+                // Unreachable in practice — the subject is this builder's own
+                // output. If it ever were, the folder reports that it could not
+                // be counted rather than counting *without* its filter, which
+                // would put a confidently wrong number in the sidebar.
+                $counts[$id] = ['count' => null, 'capped' => false, 'valid' => false];
+                continue;
+            }
+            foreach ($query->bindings() as $name => $value) {
+                $bindings[$prefix . $name] = $value;
+            }
+            $bindings[$prefix . 'folder'] = $id;
+
+            $arms[] = 'SELECT :' . $prefix . 'folder::text AS folder_id,
+                 (SELECT count(*) FROM (
+                      SELECT 1
+                      FROM notes n
+                      JOIN note_access a ON a.note_id = n.id
+                      WHERE ' . $where . $filter . '
+                      LIMIT :count_cap
+                  ) matches) AS matches';
         }
 
-        $scope = $this->scope($rules, '');
-        $where = $scope === 'all'
-            ? 'n.deleted_at IS NULL'
-            : 'n.deleted_at IS NULL AND NOT n.is_archived';
+        if ($arms === []) {
+            return $counts;
+        }
 
-        $cap = $this->countCap();
-
-        $row = Connection::selectOne(
-            'WITH RECURSIVE ' . NoteAccess::cte() . ',
-             matches AS (
-                 SELECT 1
-                 FROM notes n
-                 JOIN note_access a ON a.note_id = n.id
-                 WHERE ' . $where . $query->sql() . '
-                 LIMIT :count_cap
-             )
-             SELECT count(*) AS matches FROM matches',
-            [
-                'auth_user' => $identity->userId,
-                'auth_tenant' => $identity->tenantId,
-                'count_cap' => $cap,
-            ] + $query->bindings(),
+        $result = Connection::select(
+            'WITH RECURSIVE ' . NoteAccess::cte() . ' ' . implode(' UNION ALL ', $arms),
+            $bindings,
         );
 
-        $count = (int) ($row['matches'] ?? 0);
+        foreach ($result as $counted) {
+            $matched = (int) ($counted['matches'] ?? 0);
+            $counts[(string) $counted['folder_id']] = [
+                'count' => $matched,
+                'capped' => $matched >= $cap,
+                'valid' => true,
+            ];
+        }
 
-        return ['count' => $count, 'capped' => $count >= $cap, 'valid' => true];
+        return $counts;
     }
 
     private function countCap(): int
@@ -503,12 +600,15 @@ final class SmartFolderService
 
     /**
      * @param array<string, mixed> $row
+     * @param array{count: int|null, capped: bool, valid: bool}|null $count
+     *        Already counted as part of a page, or null to count this one row.
      * @return array<string, mixed>
      */
-    private function present(Identity $identity, array $row): array
+    private function present(Identity $identity, array $row, ?array $count = null): array
     {
         $rules = $this->rulesOf($row);
-        $count = $this->countFor($identity, $rules);
+        $count ??= $this->countsFor($identity, [$row])[(string) $row['id']]
+            ?? ['count' => null, 'capped' => false, 'valid' => false];
 
         $folder = [
             'id' => (string) $row['id'],
@@ -556,25 +656,35 @@ final class SmartFolderService
      * re-sequenced 0..n-1 around it. Storing the raw number instead leaves two
      * folders sharing a position and the sidebar flipping between two orders
      * from one reload to the next.
+     *
+     * The list re-sequenced here is **the list the caller is looking at** —
+     * same owner, same tenant gate as {@see self::listForUser()}. Re-sequencing
+     * every folder the owner has instead got both halves wrong in a multi-
+     * company account: an index counted against the visible list was applied to
+     * a longer hidden one, so a drag could land the folder back where it
+     * started, and folders belonging to a company the caller was not acting in
+     * had their positions rewritten by a drag they never saw.
      */
     private function reposition(Identity $identity, string $folderId, int $index): void
     {
         $rows = Connection::select(
             'SELECT id FROM smart_folders
-             WHERE owner_user_id = :owner AND deleted_at IS NULL AND id <> :id::uuid
+             WHERE owner_user_id = :owner AND deleted_at IS NULL
+               AND (tenant_id IS NULL OR tenant_id = :tenant)
+               AND id <> :id::uuid
              ORDER BY position, lower(name), id',
-            ['owner' => $identity->userId, 'id' => $folderId],
+            ['owner' => $identity->userId, 'tenant' => $identity->tenantId, 'id' => $folderId],
         );
 
         $ordered = array_map(static fn (array $row): string => (string) $row['id'], $rows);
         array_splice($ordered, max(0, min($index, count($ordered))), 0, [$folderId]);
 
-        Connection::transaction(static function () use ($ordered): void {
+        Connection::transaction(static function () use ($identity, $ordered): void {
             foreach ($ordered as $position => $id) {
                 Connection::execute(
                     'UPDATE smart_folders SET position = :position, updated_at = now()
-                     WHERE id = :id::uuid AND position <> :position',
-                    ['id' => $id, 'position' => $position],
+                     WHERE id = :id::uuid AND owner_user_id = :owner AND position <> :position',
+                    ['id' => $id, 'owner' => $identity->userId, 'position' => $position],
                 );
             }
         });

@@ -155,6 +155,9 @@ never talks to Drive.
 
 Reading an existing attachment follows the row's `storage_provider`, not the
 current flag, so turning Drive on changes where new files go and nothing else.
+One caveat before flipping it: Drive's MIME allowlist has no `audio/` or
+`video/`, so with Drive on, voice notes and meeting recordings are refused rather
+than stored.
 
 See [docs/DRIVE_INTEGRATION.md](docs/DRIVE_INTEGRATION.md) — including what is
 not built.

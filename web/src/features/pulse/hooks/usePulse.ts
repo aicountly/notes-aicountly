@@ -318,6 +318,12 @@ function useCancellablePost<TInput>(
     controller.current = null
   }, [])
 
+  // A request outlives the component that started it otherwise. Closing the
+  // panel or the dialog mid-answer is the same decision as pressing Cancel —
+  // nobody is going to read the result — so it aborts rather than leaving a
+  // provider call running for an answer with nowhere to go.
+  useEffect(() => () => controller.current?.abort(), [])
+
   return {
     run: mutation.mutateAsync,
     cancel,

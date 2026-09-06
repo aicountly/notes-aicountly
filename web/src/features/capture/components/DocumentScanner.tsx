@@ -336,15 +336,17 @@ export function DocumentScanner({ onSave, onCancel }: DocumentScannerProps) {
     setAnnouncement('Pages added')
   }
 
-  /** Replace a page's bytes and let go of the ones it had. */
+  /**
+   * Replace a page's bytes and let go of the ones it had.
+   *
+   * The revoke happens outside the updater on purpose: React may run an
+   * updater more than once for a single commit, and one that has a side effect
+   * in it can end up revoking the URL it just installed.
+   */
   const replacePage = (id: string, next: Omit<ScanPage, 'id'>) => {
-    setPages((current) =>
-      current.map((page) => {
-        if (page.id !== id) return page
-        URL.revokeObjectURL(page.url)
-        return { id, ...next }
-      }),
-    )
+    const previous = pagesRef.current.find((page) => page.id === id)
+    setPages((current) => current.map((page) => (page.id === id ? { id, ...next } : page)))
+    if (previous && previous.url !== next.url) URL.revokeObjectURL(previous.url)
   }
 
   const rotate = async (page: ScanPage, quarterTurns: 1 | 3) => {

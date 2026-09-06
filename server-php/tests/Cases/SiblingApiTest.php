@@ -123,9 +123,11 @@ final class SiblingApiTest extends TestCase
     {
         // The three products whose code and host are spelled differently. The
         // code goes in a request body and an object key; the host is where the
-        // socket opens. Deriving one from the other gives docs.aicountly.com,
-        // connect→chat.aicountly.com and buddy.aicountly.com — none of which
-        // resolve. See §10 of Drive's AICOUNTLY_DRIVE_STORAGE_ARCHITECTURE.md.
+        // socket opens. Deriving the host from the code gives
+        // docs.aicountly.com and chat.aicountly.com, neither of which resolves —
+        // and, worse than not resolving, buddy.aicountly.com, which is Pulse's
+        // pre-rename production alias and so answers rather than failing.
+        // See §10 of Drive's AICOUNTLY_DRIVE_STORAGE_ARCHITECTURE.md.
         $this->assertSame('docs', SiblingApi::productCode('drive'));
         $this->assertSame('docs', SiblingApi::productCode('docs'));
         $this->assertSame('https://drive.aicountly.com', SiblingApi::origin('docs', 'notes.aicountly.com'));

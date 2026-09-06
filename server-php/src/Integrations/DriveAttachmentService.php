@@ -119,17 +119,40 @@ final class DriveAttachmentService
             $context->companyParams(),
         );
 
-        // Drive's document resource names the current version's file under
-        // `filename`/`mime_type`; the older aliases are kept because this
-        // mapping predates confirmation against Drive's own serializer.
-        $name = self::firstString($file, ['filename', 'name', 'title']);
-        $mime = self::firstString($file, ['mime_type', 'mimeType']);
+        // The filename and the type belong to the *version*, not to the
+        // document, and this is the thing to get right here.
+        //
+        // `DocumentService::formatDocumentRow()` reads them from
+        // `current_filename` / `current_mime` / `current_checksum`, and those
+        // three are aliases produced by the LEFT JOIN in the *list* query
+        // (`listDocuments()`). The single-document route does not join:
+        // `getDocumentDetails()` fetches through `getDocumentForCtx()`, which is
+        // `SELECT * FROM documents`, and the `documents` table has no filename
+        // or mime column at all. So `GET /api/documents/{id}` answers
+        // `filename: null` and `mime_type: null`, always — reading them there
+        // would fail every link, for every file.
+        //
+        // What that route *does* carry is `versions[]`, the `document_versions`
+        // rows in full, and the current one is the answer.
+        $version = self::currentVersion($file);
+
+        $name = self::firstString($version, ['filename'])
+            // The document's `title` is what the uploader named it — Drive
+            // defaults it to the filename at finalize — and is the only name
+            // left if a document somehow has no readable version row.
+            ?: self::firstString($file, ['filename', 'title']);
+        $mime = self::firstString($version, ['mime_type']) ?: self::firstString($file, ['mime_type']);
         if ($name === '' || $mime === '') {
             throw ApiException::upstream(self::SERVICE, 'Drive returned a file this app cannot describe.');
         }
 
-        $size = $file['size_bytes'] ?? $file['size'] ?? $file['byte_size'] ?? 0;
-        $checksum = self::firstString($file, ['checksum_sha256', 'sha256']);
+        // `documents.size_bytes` is the real column and is set at finalize, so
+        // unlike the two above it is trustworthy on this route; the version's
+        // own count is preferred only because it names the same bytes the name
+        // and the type came from.
+        $size = $version['size_bytes'] ?? $file['size_bytes'] ?? 0;
+        $checksum = self::firstString($version, ['checksum_sha256'])
+            ?: self::firstString($file, ['checksum_sha256']);
 
         return [
             'drive_file_id' => $driveFileId,
@@ -141,6 +164,40 @@ final class DriveAttachmentService
     }
 
     // -----------------------------------------------------------------------
+
+    /**
+     * The `document_versions` row for the file as it stands today.
+     *
+     * Drive marks exactly one row per document `is_current = 1` and returns them
+     * newest first, so the flag is what is read and the ordering is only the
+     * fallback. An empty array — a document with no version, which finalize does
+     * not produce — is handled by the caller rather than guessed at here.
+     *
+     * @param array<string, mixed> $document
+     * @return array<string, mixed>
+     */
+    private static function currentVersion(array $document): array
+    {
+        $versions = $document['versions'] ?? null;
+        if (!is_array($versions)) {
+            return [];
+        }
+
+        $first = [];
+        foreach ($versions as $version) {
+            if (!is_array($version)) {
+                continue;
+            }
+            if ($first === []) {
+                $first = $version;
+            }
+            if ((int) ($version['is_current'] ?? 0) === 1) {
+                return $version;
+            }
+        }
+
+        return $first;
+    }
 
     /**
      * @param array<string, mixed> $data

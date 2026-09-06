@@ -90,6 +90,18 @@ final class JobQueueTest extends TestCase
         return $bytes;
     }
 
+    /**
+     * The header of an iPhone photo.
+     *
+     * Enough of an ISO-BMFF `ftyp` box for finfo to call it `image/heic`, which
+     * is all this needs: no PHP build can decode the picture inside one.
+     */
+    private static function heic(): string
+    {
+        return pack('N', 24) . 'ftyp' . 'heic' . pack('N', 0) . 'heic' . 'mif1'
+            . pack('N', 8) . 'meta' . str_repeat("\x00", 512);
+    }
+
     /** A real, silent WAV — enough for finfo to call it audio. */
     private static function wav(): string
     {
@@ -730,5 +742,40 @@ final class JobQueueTest extends TestCase
             'SELECT processing_status FROM note_attachments WHERE id = :id',
             ['id' => $attachment['id']],
         )['processing_status']);
+    }
+    public function testAFormatThisBuildCannotDecodeIsSkippedNotCalledCorrupt(): void
+    {
+        $note = $this->note();
+        $attachment = $this->attach($note['id'], 'IMG_4021.heic', self::heic());
+        $this->assertSame('image', $attachment['kind']);
+
+        $tally = $this->worker->run(10, 30);
+        $this->assertSame(0, $tally['failed'], 'a photo this host cannot read is not a failure');
+
+        $thumbnail = Connection::selectOne(
+            "SELECT status, permanent_failure, result->>'reason' AS reason
+               FROM note_processing_jobs
+              WHERE attachment_id = :id AND job_type = 'attachment.thumbnail'",
+            ['id' => $attachment['id']],
+        );
+        $this->assertSame('completed', (string) $thumbnail['status']);
+        $this->assertFalse((bool) $thumbnail['permanent_failure']);
+        // HEIC has no reader in any PHP build, so "no dimensions" says nothing
+        // about the bytes. Reporting it as `not_an_image` would put a red
+        // failure on every photo taken with an iPhone.
+        $this->assertSame('format_unsupported_by_gd', (string) $thumbnail['reason']);
+
+        $row = Connection::selectOne(
+            'SELECT processing_status, processing_error FROM note_attachments WHERE id = :id',
+            ['id' => $attachment['id']],
+        );
+        $this->assertSame('skipped', (string) $row['processing_status']);
+        $this->assertNull($row['processing_error']);
+
+        // And the file itself is untouched: it downloads exactly as uploaded.
+        $this->assertTrue(is_file($this->storage . '/' . (string) Connection::selectOne(
+            'SELECT storage_key FROM note_attachments WHERE id = :id',
+            ['id' => $attachment['id']],
+        )['storage_key']));
     }
 }

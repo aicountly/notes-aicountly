@@ -217,11 +217,6 @@
   cursor: pointer;
 }
 .collab-version:hover { background: var(--notes-surface-hover); }
-.collab-version[aria-current='true'] {
-  background: var(--notes-primary-soft);
-  border-color: var(--notes-primary-border);
-  font-weight: 600;
-}
 
 .collab-version__label { font-size: var(--notes-text-sm); }
 .collab-version__meta { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }

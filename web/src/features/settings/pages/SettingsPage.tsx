@@ -13,7 +13,7 @@
  * honest answer to "where is Pulse?" is a line on this page, not silence.
  */
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -29,7 +29,8 @@ import { flattenNotebooks, useNotebooks } from '../../notebooks/hooks/useNoteboo
 import { NOTE_SORTS, NOTE_VIEWS, SORT_KEY, VIEW_KEY, useDefaultNotebook, usePreference } from '../preferences'
 import type { NoteView } from '../preferences'
 import { clearOfflineData, formatBytes, useOfflineUsage } from '../offlineStorage'
-import { FEATURE_ROWS } from '../features'
+import { FEATURE_ROWS, useDeploymentAnswer } from '../features'
+import type { DeploymentAnswer } from '../features'
 import '../settings.css'
 
 const THEMES: { value: ThemePreference; label: string; icon: IconName }[] = [
@@ -43,6 +44,9 @@ const SORT_VALUES = NOTE_SORTS.map((sort) => sort.value)
 
 export default function SettingsPage() {
   const config = useAppConfig()
+  // Its *contents* are the flags and limits; its *state* is whether the server
+  // has answered at all. Both halves of the page below need the second.
+  const deployment = useDeploymentAnswer()
   const { preference, resolved, setPreference } = useTheme()
 
   const [view, setView] = usePreference<NoteView>(VIEW_KEY, VIEW_VALUES, 'grid')
@@ -50,7 +54,7 @@ export default function SettingsPage() {
   const [defaultNotebook, setDefaultNotebook] = useDefaultNotebook()
 
   const notebooks = useNotebooks()
-  const { usage, refresh } = useOfflineUsage()
+  const { usage, refreshing, refresh } = useOfflineUsage()
 
   const [clearing, setClearing] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -58,13 +62,20 @@ export default function SettingsPage() {
   const [announcement, setAnnouncement] = useState('')
 
   const notebookOptions = flattenNotebooks(notebooks.data ?? []).filter((option) => !option.is_archived)
+  const noNotebooks = notebooks.isSuccess && notebookOptions.length === 0
 
   // Dismissing the dialog drops the failure with it: reopening it should not
   // reopen an error about an attempt the user has moved on from.
-  const closeConfirm = () => {
+  //
+  // Memoised because `Dialog` keys its Escape handler, its focus trap and its
+  // scroll lock on `onClose`. A fresh function each render tears all three
+  // down and rebuilds them on every state change behind the modal — and this
+  // page changes state twice per attempt — which yanks focus off the button
+  // the user just pressed and back to the panel mid-action.
+  const closeConfirm = useCallback(() => {
     setConfirmClear(false)
     setClearError(null)
-  }
+  }, [])
 
   const clear = () => {
     setClearing(true)
@@ -144,12 +155,19 @@ export default function SettingsPage() {
             notice={
               notebooks.isError ? (
                 <ErrorNotice error={notebooks.error} onRetry={() => void notebooks.refetch()} />
+              ) : noNotebooks ? (
+                // A select whose only entry is "No notebook" is a control with
+                // nothing to choose. Say why instead of offering it.
+                <p className="set-hint">
+                  You have no notebooks yet, so new notes go straight into your library. Create one from the
+                  sidebar and it will appear here.
+                </p>
               ) : null
             }
           >
             {notebooks.isPending ? (
               <Skeleton width="100%" height={36} radius={8} />
-            ) : notebooks.isError ? null : (
+            ) : notebooks.isError || noNotebooks ? null : (
               <select
                 className="org-select"
                 value={defaultNotebook ?? ''}
@@ -172,29 +190,49 @@ export default function SettingsPage() {
           title="What this deployment can do"
           description="Set by whoever runs this server, not by you. Anything switched off is simply not in the app — there are no disabled buttons to find."
         >
-          <ul className="set-features">
-            {FEATURE_ROWS.map((row) => {
-              const on = config.features[row.flag]
+          {/* Until /config answers, `config.features` is the provider's
+              all-off fallback. That is the right default for hiding a control
+              and the wrong one here: eleven rows reading "Off" would be this
+              app's guess presented as the server's answer, and the usual
+              reason for it is that the reader is offline. */}
+          {deployment.pending ? (
+            <div className="set-features" aria-busy>
+              <Skeleton height={62} radius={10} />
+              <Skeleton height={62} radius={10} />
+              <Skeleton height={62} radius={10} />
+              <p className="set-hint">Asking the server what it has switched on.</p>
+            </div>
+          ) : deployment.error ? (
+            <ErrorNotice
+              error={deployment.error}
+              onRetry={deployment.retry}
+              retryLabel="Ask the server again"
+            />
+          ) : (
+            <ul className="set-features">
+              {FEATURE_ROWS.map((row) => {
+                const on = config.features[row.flag]
 
-              return (
-                <li className={`set-feature ${on ? '' : 'set-feature--off'}`.trim()} key={row.flag}>
-                  {/* Decorative: the badge below carries the state in words,
-                      so the colour and the icon only echo it. */}
-                  <span className="set-feature__state">
-                    <Icon name={on ? 'check' : 'close'} size={15} />
-                  </span>
+                return (
+                  <li className={`set-feature ${on ? '' : 'set-feature--off'}`.trim()} key={row.flag}>
+                    {/* Decorative: the badge below carries the state in words,
+                        so the colour and the icon only echo it. */}
+                    <span className="set-feature__state" aria-hidden>
+                      <Icon name={on ? 'check' : 'close'} size={15} />
+                    </span>
 
-                  <div className="set-feature__body">
-                    <p className="set-feature__name">
-                      {row.label}
-                      <Badge tone={on ? 'primary' : 'neutral'}>{on ? 'On' : 'Off'}</Badge>
-                    </p>
-                    <p className="set-feature__description">{on ? row.on : row.off}</p>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+                    <div className="set-feature__body">
+                      <p className="set-feature__name">
+                        {row.label}
+                        <Badge tone={on ? 'primary' : 'neutral'}>{on ? 'On' : 'Off'}</Badge>
+                      </p>
+                      <p className="set-feature__description">{on ? row.on : row.off}</p>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
         </Section>
 
         {/* --- Offline ---------------------------------------------------- */}
@@ -235,7 +273,7 @@ export default function SettingsPage() {
                 <Button icon="trash" variant={usage.pending > 0 ? 'danger' : 'secondary'} onClick={() => setConfirmClear(true)}>
                   Clear offline data
                 </Button>
-                <Button icon="refresh" variant="ghost" onClick={refresh}>
+                <Button icon="refresh" variant="ghost" loading={refreshing} onClick={refresh}>
                   Recheck
                 </Button>
               </div>
@@ -258,7 +296,9 @@ export default function SettingsPage() {
             </div>
             <div>
               <dt>Server</dt>
-              <dd>{config.env}</dd>
+              <dd>
+                <ServerFact answer={deployment}>{config.env}</ServerFact>
+              </dd>
             </div>
             <div>
               <dt>API</dt>
@@ -278,16 +318,20 @@ export default function SettingsPage() {
             <div>
               <dt>Trash is emptied after</dt>
               <dd>
-                {config.limits.trash_retention_days}{' '}
-                {config.limits.trash_retention_days === 1 ? 'day' : 'days'}
-                <span className="set-usage__note"> — set on the server</span>
+                <ServerFact answer={deployment}>
+                  {config.limits.trash_retention_days}{' '}
+                  {config.limits.trash_retention_days === 1 ? 'day' : 'days'}
+                  <span className="set-usage__note"> — set on the server</span>
+                </ServerFact>
               </dd>
             </div>
             <div>
               <dt>Largest attachment</dt>
               <dd>
-                {formatBytes(config.limits.max_attachment_bytes)}
-                <span className="set-usage__note"> — set on the server</span>
+                <ServerFact answer={deployment}>
+                  {formatBytes(config.limits.max_attachment_bytes)}
+                  <span className="set-usage__note"> — set on the server</span>
+                </ServerFact>
               </dd>
             </div>
           </dl>
@@ -392,6 +436,22 @@ function Field({
       <p className="set-hint">{hint}</p>
     </div>
   )
+}
+
+/**
+ * A number the server told us, or an honest gap where it has not.
+ *
+ * The rows in "About this app" are labelled "set on the server", so rendering
+ * the provider's fallback there — 30 days, 25 MB, an environment of "unknown" —
+ * would attribute this app's own defaults to someone's deployment. The reader
+ * is usually here because something is wrong, which is exactly when a guess
+ * costs the most.
+ */
+function ServerFact({ answer, children }: { answer: DeploymentAnswer; children: ReactNode }) {
+  if (answer.pending) return <Skeleton width="7rem" height={13} />
+  if (answer.error) return <span className="set-usage__note">not available — the server did not answer</span>
+
+  return <>{children}</>
 }
 
 function slug(value: string): string {

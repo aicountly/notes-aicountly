@@ -20,15 +20,23 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import HelpPage from './HelpPage'
 import { AppConfigProvider } from '../../../app/AppConfigProvider'
+import { ApiError } from '../../../shared/api/client'
 import type { AppConfig, FeatureFlags } from '../../../shared/api/types'
 
 vi.mock('../../../auth/portal', () => ({ ensureSesKey: async () => 'test-session-key' }))
 
-const deployment = vi.hoisted(() => ({ config: null as unknown }))
+/** What `GET /config` answers, or refuses to. */
+const deployment = vi.hoisted(() => ({ config: null as unknown, error: null as unknown }))
 
 vi.mock('../../../shared/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../shared/api/client')>()
-  return { ...actual, fetchAppConfig: async () => deployment.config }
+  return {
+    ...actual,
+    fetchAppConfig: async () => {
+      if (deployment.error) throw deployment.error
+      return deployment.config
+    },
+  }
 })
 
 const ALL_OFF: FeatureFlags = {
@@ -93,6 +101,7 @@ function explainer(title: string | RegExp): HTMLElement {
 
 beforeEach(() => {
   deployment.config = makeConfig()
+  deployment.error = null
   setPlatform('MacIntel')
 })
 
@@ -200,13 +209,35 @@ describe('HelpPage — how Notes works', () => {
 })
 
 describe('HelpPage — honesty about this deployment', () => {
-  it('says Pulse is switched off rather than promising it', () => {
+  it('says Pulse is switched off rather than promising it', async () => {
+    renderPage()
+
+    expect(await screen.findByText(/not enabled on this deployment/i)).toBeInTheDocument()
+
+    const pulse = explainer('Pulse')
+    expect(within(pulse).getByText(/there is nothing to switch on here/i)).toBeInTheDocument()
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+  })
+
+  // Both halves of "is it off, or has nobody asked yet?" are states of their
+  // own. Answering the first while the second is true is the same lie as a
+  // "Coming soon" badge, just harder to spot.
+  it('does not say Pulse is off before the server has answered', () => {
     renderPage()
 
     const pulse = explainer('Pulse')
-    expect(within(pulse).getByText(/not enabled on this deployment/i)).toBeInTheDocument()
-    expect(within(pulse).getByText(/there is nothing to switch on here/i)).toBeInTheDocument()
-    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
+    expect(within(pulse).getByText(/checking whether this deployment has pulse/i)).toBeInTheDocument()
+    expect(within(pulse).queryByText(/not enabled on this deployment/i)).not.toBeInTheDocument()
+  })
+
+  it('says it could not find out, rather than guessing, when the server is unreachable', async () => {
+    deployment.error = new ApiError('OFFLINE', 'You appear to be offline.', 0)
+
+    renderPage()
+
+    const pulse = explainer('Pulse')
+    expect(await within(pulse).findByText(/could not reach the server/i, undefined, { timeout: 4000 })).toBeInTheDocument()
+    expect(within(pulse).queryByText(/not enabled on this deployment/i)).not.toBeInTheDocument()
   })
 
   it('describes what Pulse does when the server has it on', async () => {

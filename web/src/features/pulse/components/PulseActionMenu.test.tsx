@@ -42,6 +42,7 @@ function catalogue(): PulseActionDefinition[] {
   return [
     { id: 'summarise', label: 'Summarise', group: 'understand', scope: 'selection', output: 'text', enabled: true },
     { id: 'translate', label: 'Translate', group: 'write', scope: 'selection', output: 'document_fragment', enabled: true },
+    { id: 'to_checklist', label: 'Turn into a checklist', group: 'transform', scope: 'selection', output: 'checklist', enabled: true },
     { id: 'create_table', label: 'Make a table', group: 'transform', scope: 'selection', output: 'table', enabled: false },
     { id: 'ask_note', label: 'Ask this note', group: 'ask', scope: 'note', output: 'text', enabled: true },
   ]
@@ -88,20 +89,24 @@ async function openMenu(user: ReturnType<typeof userEvent.setup>) {
   return screen.findByRole('menu', { name: 'Pulse actions' })
 }
 
+/** A plain prose answer, the ordinary case. */
+function summary() {
+  return ok({
+    action: 'summarise',
+    output: 'text',
+    answer: 'Three suppliers were shortlisted.',
+    data: null,
+    citations: [
+      { note_id: NOTE_ID, title: 'Supplier review', block_id: null, snippet: 'Shortlist: Acme, Borex, Cintra.' },
+    ],
+    grounded: true,
+    model: 'test-model',
+  })
+}
+
 beforeEach(() => {
   features.ai = true
-  runResponse = () =>
-    ok({
-      action: 'summarise',
-      output: 'text',
-      answer: 'Three suppliers were shortlisted.',
-      data: null,
-      citations: [
-        { note_id: NOTE_ID, title: 'Supplier review', block_id: null, snippet: 'Shortlist: Acme, Borex, Cintra.' },
-      ],
-      grounded: true,
-      model: 'test-model',
-    })
+  runResponse = summary
 
   fetchMock.mockImplementation(async (url: string) =>
     url.includes('/pulse/actions') ? ok(catalogue()) : runResponse(),
@@ -254,6 +259,83 @@ describe('PulseActionMenu', () => {
     const prose = within(dialog).getByText('Supplier reviews usually cover price and lead time.')
 
     expect(warning.compareDocumentPosition(prose) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('applies the checklist it previewed, not the JSON the model answered with', async () => {
+    const user = userEvent.setup()
+    // What `NotesAIService::shape()` sends for a checklist: the parsed items in
+    // `data`, and the model's raw JSON left in `answer`.
+    runResponse = () =>
+      ok({
+        action: 'to_checklist',
+        output: 'checklist',
+        answer: '{"items": [{"text": "Chase Borex for pricing"}, {"text": "Book the review", "due_at": "2026-03-04"}]}',
+        data: {
+          items: [
+            { text: 'Chase Borex for pricing', due_at: null, assignee: null, priority: null },
+            { text: 'Book the review', due_at: '2026-03-04', assignee: null, priority: null },
+          ],
+        },
+        citations: [],
+        grounded: true,
+        model: 'test-model',
+      })
+    const { onReplaceNote } = renderMenu()
+
+    const menu = await openMenu(user)
+    await user.click(await within(menu).findByRole('menuitem', { name: /Turn into a checklist/ }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('Chase Borex for pricing')).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: 'Replace note' }))
+
+    // The list that was on screen. Writing `answer` here would drop a raw JSON
+    // blob into the note the user was shown a tidy list for.
+    expect(onReplaceNote).toHaveBeenCalledWith(
+      '- Chase Borex for pricing\n- Book the review (2026-03-04)',
+    )
+  })
+
+  it('lets a server fault be tried again without picking the action twice', async () => {
+    const user = userEvent.setup()
+    runResponse = () => failure(500, 'INTERNAL_ERROR', 'Pulse could not be reached.')
+    renderMenu()
+
+    const menu = await openMenu(user)
+    await user.click(await within(menu).findByRole('menuitem', { name: /Summarise/ }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Pulse could not be reached.')
+
+    runResponse = summary
+    await user.click(within(alert).getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByText('Three suppliers were shortlisted.')).toBeInTheDocument()
+  })
+
+  it('says so when the browser will not give Pulse the clipboard, instead of doing nothing', async () => {
+    const user = userEvent.setup()
+    renderMenu()
+
+    const menu = await openMenu(user)
+    await user.click(await within(menu).findByRole('menuitem', { name: /Summarise/ }))
+
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText('Three suppliers were shortlisted.')
+
+    // No async clipboard: every insecure origin, and a few browsers besides.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    await user.click(within(dialog).getByRole('button', { name: 'Copy' }))
+
+    // Said on screen, and said in the live region — the press has to leave
+    // some trace, whether or not the reader can see the dialog.
+    expect(
+      await within(dialog).findByText(/The answer above can be selected and copied by hand/),
+    ).toBeInTheDocument()
+    expect(within(dialog).getByRole('status')).toHaveTextContent(
+      'Nothing was copied: this browser would not let Pulse use the clipboard.',
+    )
   })
 
   it('closes on Escape and gives focus back to the trigger', async () => {

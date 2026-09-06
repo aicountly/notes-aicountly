@@ -742,6 +742,136 @@ final class PulseTest extends TestCase
             $this->assertSame('UPSTREAM_UNAVAILABLE', $result['body']['error']['code'] ?? '');
         });
     }
+
+    // -- Regressions --------------------------------------------------------
+
+    /**
+     * A citation must name a block the model was actually given.
+     *
+     * {@see PromptBundle::withContext()} drops a block whose text is empty once
+     * control characters are stripped, and any block past the context budget.
+     * Dropping one renumbers every block after it, but the citations are held
+     * one per *source* item — so `[2]` used to be resolved against the second
+     * source rather than the second block, and an answer could come back citing
+     * a note whose text was never sent. Both halves are asserted: the
+     * renumbering itself, and the end-to-end answer.
+     */
+    public function testACitationNeverPointsAtABlockThatWasNotSent(): void
+    {
+        // The renumbering. Block 1 is source 2 here, not source 1.
+        $bundle = PromptBundle::create('ask_notes', 'text', 'instruction', 'task', null, true)
+            ->withContext([
+                ['note_id' => 'first', 'text' => "\x01\x02"],
+                ['note_id' => 'second', 'text' => 'The second note.'],
+                ['note_id' => 'third', 'text' => 'The third note.'],
+            ]);
+
+        $this->assertCount(2, $bundle->contextItems(), 'the empty block is not sent');
+        $this->assertSame([1, 2], $bundle->contextSources(), 'each block says which source it came from');
+
+        // And the answer. The selection cleans away to nothing, so the model is
+        // given no note text at all — and must not be reported as having read
+        // the note the caller named.
+        $this->withPulse(function (): void {
+            $note = $this->note($this->alice, 'Ledger', 'The ledger was reconciled in March.');
+            $provider = new RecordingPulseProvider('Rewritten.');
+
+            $answer = $this->pulse($provider)->selection($this->aliceIdentity, [
+                'action' => 'fix_grammar',
+                'note_id' => $note['id'],
+                'text' => "\x01\x02",
+            ]);
+
+            $this->assertCount(0, $provider->bundle->contextItems(), 'nothing survived cleaning');
+            $this->assertCount(0, $answer['citations'], 'a block that was not sent leaves no citation');
+            $this->assertFalse($answer['grounded'], 'nothing was read, so nothing is claimed');
+        });
+    }
+
+    /**
+     * `find_related` tells the model that block 1 is the note being read. A
+     * note with nothing in it has no block 1, so the comparison is refused
+     * rather than run against a context the instruction misdescribes.
+     */
+    public function testFindRelatedRefusesANoteWithNothingInIt(): void
+    {
+        $this->withPulse(function (): void {
+            $empty = $this->note($this->alice, 'Harbour survey diver', '');
+            $this->note($this->alice, 'Diver quotes', 'Two divers quoted for the harbour survey.');
+            $provider = new RecordingPulseProvider('{"related":[{"block":1,"why":"x"}]} [1]');
+
+            $this->assertApiError(
+                'VALIDATION_FAILED',
+                fn () => $this->pulse($provider)->onNote($this->aliceIdentity, $empty['id'], 'find_related'),
+                'find_related on a note with no text',
+            );
+            $this->assertSame(0, $provider->calls, 'and nothing was sent');
+        });
+    }
+
+    /**
+     * A model's guess at a date is a suggestion, not a field the caller typed.
+     *
+     * "TBD" and "whenever we get to it" are what models answer when a note
+     * gives no date. Passing them through cost twice: the client showed a due
+     * date that was not one, and `{"save": true}` failed with a 422 about a
+     * `due_at` the caller never sent — after writing the items before it.
+     */
+    public function testASuggestedDueDateThatIsNotADateIsDroppedRatherThanSaved(): void
+    {
+        $this->withPulse(function (): void {
+            $note = $this->note($this->alice, 'Standup', 'Priya will send the invoice, Sam will call the bank.');
+            $provider = new RecordingPulseProvider(
+                '{"items":[{"text":"Send the invoice","due_at":"2026-03-06"},'
+                . '{"text":"Call the bank","due_at":"whenever we get to it"},'
+                . '{"text":"File the return","due_at":"TBD"}]}',
+            );
+            $service = $this->pulse($provider);
+
+            $suggested = $service->onNote($this->aliceIdentity, $note['id'], 'extract_actions');
+            $items = $suggested['data']['items'];
+            $this->assertSame('2026-03-06', $items[0]['due_at'] ?? null, 'a real date survives verbatim');
+            $this->assertNull($items[1]['due_at'], 'a phrase is not a due date');
+            $this->assertNull($items[2]['due_at'], 'nor is "TBD"');
+            $this->assertSame('Call the bank', $items[1]['text'] ?? null, 'the action itself is still suggested');
+
+            // And saving the list saves all of it, rather than stopping partway
+            // through on the first item the actions service refuses.
+            $saved = $service->onNote($this->aliceIdentity, $note['id'], 'extract_actions', ['save' => true]);
+            $this->assertTrue($saved['saved']);
+
+            $actions = $this->alice->get('/notes/' . $note['id'] . '/actions')['body']['data'];
+            $this->assertCount(3, $actions, 'every extracted action is written, or none is');
+        });
+    }
+
+    /**
+     * An id of the wrong type is refused, not ignored.
+     *
+     * `{"notebook_id": 12345}` used to fall through the `is_string` guard and
+     * answer from every note the caller can read, while they believed they had
+     * asked about one notebook. A scope that cannot be honoured is a 422.
+     */
+    public function testAnIdOfTheWrongTypeIsRefusedRatherThanIgnored(): void
+    {
+        $this->withPulse(function (): void {
+            $provider = new RecordingPulseProvider('Answer.');
+            $service = $this->pulse($provider);
+
+            $this->assertApiError('VALIDATION_FAILED', fn () => $service->askNotes($this->aliceIdentity, [
+                'question' => 'anything',
+                'notebook_id' => 12345,
+            ]), 'a notebook scope that is not an id');
+
+            $this->assertApiError('VALIDATION_FAILED', fn () => $service->selection($this->aliceIdentity, [
+                'action' => 'summarise',
+                'text' => 'anything',
+                'note_id' => 12345,
+            ]), 'a note id that is not an id');
+
+            $this->assertSame(0, $provider->calls, 'neither reached the provider');
+        });
+    }
 }
 
 /**

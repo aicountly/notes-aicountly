@@ -84,7 +84,9 @@ export function VersionHistoryDrawer({ note, onClose, onRestored }: VersionHisto
       </header>
 
       <div className="side-panel__body">
-        {error ? <ErrorNotice error={error} /> : null}
+        {/* A refused restore is dismissible — the version is still selected and
+            the button is still there to try again with. */}
+        {error ? <ErrorNotice error={error} onDismiss={() => setError(null)} /> : null}
 
         {selectedEntry === null ? (
           <>
@@ -112,10 +114,13 @@ export function VersionHistoryDrawer({ note, onClose, onRestored }: VersionHisto
               <ul className="collab-versions">
                 {entries.map((entry) => (
                   <li key={entry.id}>
+                    {/* No aria-current here: this list is replaced by the
+                        preview when a version is picked, so "the current one"
+                        is never one of these rows — the attribute would be
+                        false on every render and say nothing. */}
                     <button
                       type="button"
                       className="collab-version"
-                      aria-current={entry.id === selectedId}
                       onClick={() => setSelectedId(entry.id)}
                     >
                       <span className="collab-version__label">
@@ -253,12 +258,18 @@ function textOf(node: DocNode): string {
  * a list item, a quotation, a code block. Marks are dropped: this is a preview
  * of what a version *said*, and bold text that cannot be edited is not worth a
  * second renderer to reproduce.
+ *
+ * At most `MAX_PREVIEW_BLOCKS + 1` lines come back: the extra one is how the
+ * caller knows there is more, without it having to walk the document twice.
  */
 export function previewBlocks(doc: NoteDocument): PreviewBlock[] {
   const blocks: PreviewBlock[] = []
 
+  // One past the cap, so the caller can tell a version that ends exactly at
+  // the cap from one that is cut off — and does not tell somebody the rest is
+  // hidden when there is no rest.
   const walk = (node: DocNode, inList: boolean, inQuote: boolean): void => {
-    if (blocks.length >= MAX_PREVIEW_BLOCKS) return
+    if (blocks.length > MAX_PREVIEW_BLOCKS) return
 
     const standalone = STANDALONE[node.type]
     if (standalone !== undefined) {
@@ -297,7 +308,9 @@ export function previewBlocks(doc: NoteDocument): PreviewBlock[] {
 }
 
 function VersionPreview({ title, doc }: { title: string | null; doc: NoteDocument }) {
-  const blocks = previewBlocks(doc)
+  const collected = previewBlocks(doc)
+  const blocks = collected.slice(0, MAX_PREVIEW_BLOCKS)
+  const truncated = collected.length > MAX_PREVIEW_BLOCKS
 
   return (
     <div className="collab-preview">
@@ -318,7 +331,7 @@ function VersionPreview({ title, doc }: { title: string | null; doc: NoteDocumen
         ))
       )}
 
-      {blocks.length >= MAX_PREVIEW_BLOCKS ? (
+      {truncated ? (
         <p className="collab-note collab-note--muted">
           The rest of this version is not shown. Restoring brings all of it back.
         </p>

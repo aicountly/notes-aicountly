@@ -93,22 +93,46 @@ export function formatBytes(bytes: number | null): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
 }
 
-/** The usage figures, and a way to read them again after clearing. */
-export function useOfflineUsage(): { usage: OfflineUsage | null; refresh: () => void } {
+export interface OfflineUsageState {
+  /** null until the first read finishes. */
+  usage: OfflineUsage | null
+  /** A re-read asked for by the user is in flight. */
+  refreshing: boolean
+  refresh: () => void
+}
+
+/**
+ * The usage figures, and a way to read them again after clearing.
+ *
+ * `refreshing` exists because the figures usually come back identical: without
+ * it, "Recheck" is a button that answers by changing nothing, which is
+ * indistinguishable from a button wired to nothing. The stale figures stay on
+ * screen while it runs — blanking them would make a re-read look like data
+ * loss.
+ */
+export function useOfflineUsage(): OfflineUsageState {
   const [usage, setUsage] = useState<OfflineUsage | null>(null)
   const [nonce, setNonce] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
 
+    const settle = (result: OfflineUsage) => {
+      // Only the newest read may answer: two quick Rechecks must not let the
+      // slower one overwrite the fresher figures, or clear the busy state
+      // while the newer read is still running.
+      if (cancelled) return
+      setUsage(result)
+      setRefreshing(false)
+    }
+
     void readOfflineUsage()
-      .then((result) => {
-        if (!cancelled) setUsage(result)
-      })
+      .then(settle)
       .catch(() => {
         // A store that cannot be read is a store with nothing in it as far as
         // this screen is concerned; it must not take the page down.
-        if (!cancelled) setUsage({ ...EMPTY, unavailable: true })
+        settle({ ...EMPTY, unavailable: true })
       })
 
     return () => {
@@ -116,7 +140,10 @@ export function useOfflineUsage(): { usage: OfflineUsage | null; refresh: () => 
     }
   }, [nonce])
 
-  const refresh = useCallback(() => setNonce((current) => current + 1), [])
+  const refresh = useCallback(() => {
+    setRefreshing(true)
+    setNonce((current) => current + 1)
+  }, [])
 
-  return { usage, refresh }
+  return { usage, refreshing, refresh }
 }

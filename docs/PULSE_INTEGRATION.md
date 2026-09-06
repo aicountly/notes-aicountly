@@ -166,10 +166,15 @@ builds `{origin}/api/{path}`.
 
 Two deliberate differences:
 
-- **An unrecognised host resolves to sandbox, not production.** Pulse's copy
-  answers "is this a sandbox build", where guessing wrong costs a redirect.
-  Notes' copy decides which company's live data a server-to-server call reaches,
-  so it fails towards the empty environment.
+- **An unrecognised host resolves to sandbox, not production.** This is a
+  genuine divergence and not a difference of purpose: `ProductApiResolver::isSandboxHost()`
+  is doing the same server-side job as Notes', and it `return false`s at the end
+  — an unexpected host sends Pulse's sibling calls at production. (So does the
+  frontend copy in `web/src/auth/hostnames.ts`, but that one is answering "is
+  this a sandbox build", where guessing wrong costs a redirect.) Notes' copy
+  decides which company's live data a server-to-server call reaches, so it fails
+  towards the empty environment instead. Anyone syncing the two files must keep
+  this difference rather than tidy it away.
 - **A product code is not a hostname.** Drive answers on `drive.aicountly.com`
   but its `product_code` is `docs`; Connect is `connect.` / `chat`; Pulse is
   `pulse.` / `buddy` (and `buddy.gh.aicountly.com` in sandbox, because the

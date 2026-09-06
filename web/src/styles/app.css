@@ -601,11 +601,23 @@ button, input, textarea, select { font: inherit; color: inherit; }
     inset: var(--notes-header-height) auto 0 0;
     z-index: var(--notes-z-drawer);
     transform: translateX(-100%);
-    transition: transform var(--notes-duration) var(--notes-ease);
+    /* `visibility` and not just the transform: a drawer that is merely slid
+       off-screen keeps every link in the tab order and in the accessibility
+       tree, so a keyboard or screen-reader user on a phone walks through a
+       navigation they cannot see. Hidden takes it out of both. It is animated
+       so the closing slide still plays — visibility flips at the far end of the
+       transition when going to hidden, and immediately when coming back. */
+    visibility: hidden;
+    transition:
+      transform var(--notes-duration) var(--notes-ease),
+      visibility var(--notes-duration) var(--notes-ease);
     background: var(--notes-surface);
     box-shadow: var(--notes-shadow-lg);
   }
-  .shell__sidebar--open { transform: translateX(0); }
+  .shell__sidebar--open {
+    transform: translateX(0);
+    visibility: visible;
+  }
 
   .shell__scrim {
     display: block;

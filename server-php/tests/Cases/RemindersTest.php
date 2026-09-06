@@ -636,4 +636,168 @@ final class RemindersTest extends TestCase
         $this->assertCount(1, $claimed);
         $this->assertSame($snoozedPast['id'], $claimed[0]['id']);
     }
+
+    // -- Regressions --------------------------------------------------------
+
+    /**
+     * A date PHP will parse but `timestamptz` will not store.
+     *
+     * `+300000-01-15T09:00:00Z` is a perfectly good DateTimeImmutable and a
+     * perfectly bad timestamp: unbounded, the refusal arrived as an uncaught
+     * PDOException from inside the INSERT, so a malformed date answered 500.
+     * Every door that takes one is walked here, because each built its own
+     * statement.
+     */
+    public function testADateBeyondWhatPostgresStoresIsRefusedRatherThanCrashing(): void
+    {
+        $note = $this->note();
+        $beyond = '+300000-01-15T09:00:00Z';
+
+        $created = $this->alice->post('/notes/' . $note['id'] . '/reminders', ['due_at' => $beyond]);
+        $this->assertSame(422, $created['status']);
+        $this->assertNotNull($created['body']['error']['details']['fields']['due_at'] ?? null);
+        $this->assertCount(0, $this->alice->get('/reminders')['body']['data'], 'nothing was written');
+
+        $reminder = $this->reminder($this->alice, $note['id']);
+        $this->assertSame(422, $this->alice->patch('/reminders/' . $reminder['id'], ['due_at' => $beyond])['status']);
+        $this->assertSame(422, $this->alice->post('/reminders/' . $reminder['id'] . '/snooze', [
+            'until' => $beyond,
+        ])['status']);
+
+        // Neither attempt moved the reminder that does exist.
+        $survivor = $this->alice->get('/reminders')['body']['data'][0];
+        $this->assertSame('2030-01-15T09:00:00+00:00', $survivor['due_at']);
+        $this->assertNull($survivor['snoozed_until']);
+    }
+
+    /**
+     * A repeat that ends before it starts is a repeat that never repeats.
+     *
+     * Stored, it produces a row labelled `recurring` that completes once and
+     * dies — the quiet wrongness this domain refuses everywhere else.
+     */
+    public function testASeriesThatHasAlreadyEndedIsRefusedRatherThanStored(): void
+    {
+        $note = $this->note();
+
+        $created = $this->alice->post('/notes/' . $note['id'] . '/reminders', [
+            'due_at' => '2030-01-15T09:00:00Z',
+            'recurrence_rule' => 'FREQ=DAILY;UNTIL=20200101T000000Z',
+        ]);
+        $this->assertSame(422, $created['status']);
+        $this->assertNotNull($created['body']['error']['details']['fields']['recurrence_rule'] ?? null);
+        $this->assertCount(0, $this->alice->get('/reminders')['body']['data']);
+
+        // `UNTIL` on the first occurrence itself is a series of one, which is
+        // what `COUNT=1` means and is allowed.
+        $once = $this->alice->post('/notes/' . $note['id'] . '/reminders', [
+            'due_at' => '2030-01-15T09:00:00Z',
+            'recurrence_rule' => 'FREQ=DAILY;COUNT=1',
+        ]);
+        $this->assertSame(201, $once['status']);
+    }
+
+    /**
+     * Rescheduling a counted series past its own end.
+     *
+     * `COUNT` is resolved into an absolute `UNTIL` against the first
+     * occurrence, so moving the reminder beyond that date leaves a row that
+     * still says `recurring`, still draws the repeat icon, and has nothing
+     * left to fire. The move is refused with the end date named.
+     */
+    public function testMovingACountedSeriesPastItsEndIsRefusedInsteadOfKillingItQuietly(): void
+    {
+        Clock::freeze((int) strtotime('2030-01-10T00:00:00Z'));
+        $note = $this->note();
+        $reminder = $this->reminder($this->alice, $note['id'], ['recurrence_rule' => 'FREQ=DAILY;COUNT=5']);
+        $this->assertSame('FREQ=DAILY;UNTIL=20300119T090000Z', $reminder['recurrence_rule']);
+
+        $moved = $this->alice->patch('/reminders/' . $reminder['id'], ['due_at' => '2030-03-01T09:00:00Z']);
+        $this->assertSame(422, $moved['status']);
+        // The complaint names the half the caller actually sent.
+        $this->assertNotNull($moved['body']['error']['details']['fields']['due_at'] ?? null);
+
+        // Inside the series it moves, and it still repeats afterwards.
+        $inside = $this->alice->patch('/reminders/' . $reminder['id'], ['due_at' => '2030-01-17T09:00:00Z'])['body']['data'];
+        $this->assertSame('recurring', $inside['reminder_type']);
+        $this->assertSame(
+            '2030-01-18T09:00:00+00:00',
+            $this->alice->post('/reminders/' . $reminder['id'] . '/complete')['body']['data']['due_at'],
+        );
+
+        // Clearing the repeat frees the date, because there is no series left
+        // to contradict.
+        $this->alice->patch('/reminders/' . $reminder['id'], ['recurrence_rule' => null]);
+        $this->assertSame(200, $this->alice->patch('/reminders/' . $reminder['id'], [
+            'due_at' => '2030-03-01T09:00:00Z',
+        ])['status']);
+    }
+
+    /**
+     * The row's company is the note's, not whoever was logged in.
+     *
+     * A personal note is readable from every company context. Stamping the
+     * acting company onto its reminder left a row the list happily returned
+     * and every write answered 404 to — visible, undeletable, still queued.
+     */
+    public function testAReminderOnAPersonalNoteFollowsTheNoteIntoEveryCompanyContext(): void
+    {
+        $personal = new ApiClient(Support::user('a'));
+        $note = $personal->post('/notes', ['document' => Support::doc('personal papers')])['body']['data'];
+
+        $acme = new ApiClient(Support::user('a', 'tenant-acme'));
+        $reminder = $acme->post('/notes/' . $note['id'] . '/reminders', [
+            'due_at' => '2030-01-15T09:00:00Z',
+        ])['body']['data'];
+
+        $this->assertCount(1, $personal->get('/reminders')['body']['data']);
+        $this->assertSame(200, $personal->patch('/reminders/' . $reminder['id'], [
+            'due_at' => '2030-02-01T09:00:00Z',
+        ])['status'], 'the list and the writes must agree about the same row');
+        $this->assertSame(200, $personal->post('/reminders/' . $reminder['id'] . '/complete')['status']);
+
+        // A company note still keeps its own boundary, for the same reason:
+        // the reminder inherits the note's tenant, so both halves agree.
+        $acmeNote = $acme->post('/notes', ['document' => Support::doc('acme numbers')])['body']['data'];
+        $acmeReminder = $acme->post('/notes/' . $acmeNote['id'] . '/reminders', [
+            'due_at' => '2030-01-15T09:00:00Z',
+        ])['body']['data'];
+
+        $globex = new ApiClient(Support::user('a', 'tenant-globex'));
+        $this->assertCount(0, $globex->get('/reminders')['body']['data']);
+        $this->assertSame(404, $globex->delete('/reminders/' . $acmeReminder['id'])['status']);
+    }
+
+    /**
+     * Deleting your own row is not a licence to write to someone else's note.
+     *
+     * Deletion deliberately skips the note check so a lost share cannot strand
+     * a row in the caller's queue — but the activity trail belongs to the note
+     * and is read by everyone still on it, so the trail entry is the one part
+     * that stays gated.
+     */
+    public function testClearingAReminderOnALostNoteDoesNotWriteToItsTrail(): void
+    {
+        $note = $this->note();
+        $this->share($note['id'], 'editor');
+        $his = $this->reminder($this->bob, $note['id']);
+        $this->unshare($note['id']);
+
+        $this->assertSame(204, $this->bob->delete('/reminders/' . $his['id'])['status']);
+
+        $trail = Connection::select(
+            'SELECT action FROM note_activity WHERE note_id = :note AND actor_user_id = \'user-b\' ORDER BY created_at',
+            ['note' => $note['id']],
+        );
+        $this->assertSame(['reminder.set'], array_column($trail, 'action'), 'no trail entry after the share was withdrawn');
+
+        // Someone who can still open the note does leave a trace, so this is a
+        // gate rather than the feature quietly going missing.
+        $hers = $this->reminder($this->alice, $note['id']);
+        $this->alice->delete('/reminders/' . $hers['id']);
+        $this->assertTrue(in_array('reminder.cleared', array_column(Connection::select(
+            'SELECT action FROM note_activity WHERE note_id = :note AND actor_user_id = \'user-a\'',
+            ['note' => $note['id']],
+        ), 'action'), true));
+    }
 }

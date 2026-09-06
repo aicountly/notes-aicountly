@@ -7,7 +7,9 @@
  * sections of prose and small controls.
  *
  * Form controls (`.org-select`, `.org-label`) are the shared ones from
- * features/organise. Every value here is a token from styles/tokens.css.
+ * features/organise. Every colour, space, radius and type size here is a token
+ * from styles/tokens.css — the only raw lengths are the hairline paddings and
+ * the two fixed icon boxes, which are geometry rather than design values.
  * ------------------------------------------------------------------------- */
 
 .set-page {

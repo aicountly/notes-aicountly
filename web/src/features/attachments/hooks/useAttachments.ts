@@ -23,9 +23,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useAppConfig } from '../../../app/AppConfigProvider'
+import { ensureSesKey } from '../../../auth/portal'
 import { ApiError, api } from '../../../shared/api/client'
 import { getApiBaseUrl } from '../../../config'
 import { queryKeys } from '../../../shared/query/queryClient'
+import { ERROR_CODES } from '../../../shared/api/types'
 import type { Attachment, AttachmentKind } from '../../../shared/api/types'
 
 // ---------------------------------------------------------------------------
@@ -150,6 +152,156 @@ export function attachmentContentUrl(attachment: Attachment): string {
   return `${getApiBaseUrl()}${attachment.content_url}`
 }
 
+/**
+ * The bytes, fetched with the session attached.
+ *
+ * The content endpoint is behind the same Bearer ses_key as the rest of the
+ * API — `index.php` reads the credential from the Authorization header and
+ * from nowhere else. A browser loading an `<img src>`, an `<object data>` or
+ * following a link sends no such header, so pointing any of those straight at
+ * {@link attachmentContentUrl} produces a 401 envelope: a broken image, and a
+ * Download that saves an error message. Everything that needs the file itself
+ * goes through here and hands the DOM an object URL instead.
+ */
+async function fetchBytes(url: string, signal?: AbortSignal): Promise<Blob> {
+  // Same reasoning as the API client: navigator.onLine is worthless as a
+  // positive signal and reliable as a negative one.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new ApiError(
+      ERROR_CODES.offline,
+      'You are offline, so this file cannot be opened right now.',
+      0,
+    )
+  }
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      headers: { Authorization: `Bearer ${await ensureSesKey()}` },
+      credentials: 'omit',
+      signal,
+    })
+  } catch (error) {
+    if (signal?.aborted) throw error
+
+    // A fetch that throws is usually a dropped connection, but it is also what
+    // a store redirect without CORS headers looks like — so `offline` is only
+    // claimed when the browser agrees the connection is gone.
+    const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+    throw new ApiError(
+      offline ? ERROR_CODES.offline : 'FILE_UNREACHABLE',
+      offline
+        ? 'You are offline, so this file cannot be opened right now.'
+        : 'That file could not be reached. Check your connection and try again.',
+      0,
+    )
+  }
+
+  if (!response.ok) {
+    throw new ApiError(
+      `HTTP_${response.status}`,
+      response.status === 404
+        ? 'That file is no longer stored on the server.'
+        : 'That file could not be opened.',
+      response.status,
+    )
+  }
+
+  return response.blob()
+}
+
+export function fetchAttachmentBlob(attachment: Attachment, signal?: AbortSignal): Promise<Blob> {
+  return fetchBytes(attachmentContentUrl(attachment), signal)
+}
+
+export interface AttachmentObjectUrl {
+  url: string | null
+  loading: boolean
+  error: ApiError | null
+}
+
+/**
+ * An object URL for one attachment, live for as long as it is asked for.
+ *
+ * `active` is what keeps a list of twenty files from fetching twenty of them:
+ * the caller passes `false` until the preview is actually being shown, and the
+ * URL is revoked the moment it stops being needed.
+ */
+export function useAttachmentObjectUrl(
+  attachment: Attachment,
+  active: boolean,
+): AttachmentObjectUrl {
+  const [state, setState] = useState<AttachmentObjectUrl>({
+    url: null,
+    loading: false,
+    error: null,
+  })
+
+  // A string, not the attachment object: a poll that returns a new row with a
+  // changed `processing_status` must not re-download the file.
+  const contentUrl = attachmentContentUrl(attachment)
+
+  useEffect(() => {
+    if (!active) {
+      setState({ url: null, loading: false, error: null })
+      return undefined
+    }
+
+    const controller = new AbortController()
+    let objectUrl: string | null = null
+    setState({ url: null, loading: true, error: null })
+
+    void fetchBytes(contentUrl, controller.signal)
+      .then((blob) => {
+        if (controller.signal.aborted) return
+        objectUrl = URL.createObjectURL(blob)
+        setState({ url: objectUrl, loading: false, error: null })
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        setState({
+          url: null,
+          loading: false,
+          error:
+            error instanceof ApiError
+              ? error
+              : new ApiError('BAD_RESPONSE', 'That file could not be opened.', 0),
+        })
+      })
+
+    return () => {
+      controller.abort()
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [active, contentUrl])
+
+  return state
+}
+
+/**
+ * Save the file to the user's device.
+ *
+ * A plain `<a download>` cannot do this — see {@link fetchBytes} — so the bytes
+ * are fetched first and offered as a blob, which is also what makes `download`
+ * honour the filename regardless of where the store redirected to.
+ */
+export async function downloadAttachment(attachment: Attachment): Promise<void> {
+  const blob = await fetchAttachmentBlob(attachment)
+  const url = URL.createObjectURL(blob)
+
+  const link = document.createElement('a')
+  link.href = url
+  link.download = attachment.filename
+  link.rel = 'noopener'
+  document.body.append(link)
+  link.click()
+  link.remove()
+
+  // The click starts a save that outlives this function; revoking straight
+  // away cancels it in some browsers.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
 // ---------------------------------------------------------------------------
 // Uploading
 // ---------------------------------------------------------------------------
@@ -188,6 +340,14 @@ export async function uploadFile(
  * Returns the shape the editor's `ImageUploader` expects — a URL to render
  * plus the id that ties the image node to its attachment — without this
  * feature importing the editor, which is a sibling rather than a dependency.
+ *
+ * `src` is deliberately the canonical {@link attachmentContentUrl} and not an
+ * object URL: the editor writes this string into the saved document, and a
+ * `blob:` address is dead the moment the tab closes. That URL is only reachable
+ * with the session's Bearer token, so an image node pointing at it renders only
+ * once the editor resolves it through {@link fetchAttachmentBlob} (or the
+ * server starts issuing a signed link on the attachment). `attachmentId` is
+ * what makes either possible.
  */
 export function useImageUploader(noteId: string | undefined) {
   const client = useQueryClient()
@@ -233,6 +393,12 @@ export interface PendingUpload {
   previewUrl: string | null
   uploading: boolean
   error: string | null
+  /**
+   * False for a file this app refused before it was sent — an empty file, one
+   * over the deployment's ceiling, an extension the server will not take.
+   * Sending it again cannot change the answer, so no retry is offered.
+   */
+  retryable: boolean
 }
 
 function newKey(): string {
@@ -281,6 +447,13 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
 
   const pollStartedAt = useRef<number | null>(null)
   const [watchExpired, setWatchExpired] = useState(false)
+  /**
+   * Bumped by {@link checkAgain}. Without it the expiry timer below is keyed
+   * only on `isBusy` — which does not change when the user asks to look again —
+   * so the second watch would run out in silence and the notice offering the
+   * button would never come back.
+   */
+  const [watchGeneration, setWatchGeneration] = useState(0)
   const [pending, setPending] = useState<PendingUpload[]>([])
   const [removingId, setRemovingId] = useState<string | null>(null)
 
@@ -318,7 +491,7 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
 
     const timer = window.setTimeout(() => setWatchExpired(true), remaining)
     return () => window.clearTimeout(timer)
-  }, [isBusy])
+  }, [isBusy, watchGeneration])
 
   // An object URL lives as long as the document unless it is revoked, and a
   // note with twenty scanned pages open all day is where that starts to show.
@@ -365,7 +538,11 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
       } catch (error) {
         const message = describeUploadError(error, item.filename)
         setPending((current) =>
-          current.map((row) => (row.key === item.key ? { ...row, uploading: false, error: message } : row)),
+          current.map((row) =>
+            // The file did reach the network, so asking again is a real
+            // option — unlike a rejection this app made on its own.
+            row.key === item.key ? { ...row, uploading: false, error: message, retryable: true } : row,
+          ),
         )
         return { ok: false, message }
       }
@@ -394,6 +571,7 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
           previewUrl,
           uploading: false,
           error: rejection,
+          retryable: rejection === null,
         }
       })
 
@@ -423,7 +601,7 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
   const retryPending = useCallback(
     (key: string) => {
       const item = pending.find((row) => row.key === key)
-      if (!item || item.uploading) return
+      if (!item || item.uploading || !item.retryable) return
       void send(item, {})
     },
     [pending, send],
@@ -476,6 +654,7 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
   const checkAgain = useCallback(() => {
     pollStartedAt.current = Date.now()
     setWatchExpired(false)
+    setWatchGeneration((generation) => generation + 1)
     void refetchQuery()
   }, [refetchQuery])
 

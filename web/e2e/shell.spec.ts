@@ -7,25 +7,37 @@
  * fail when the app becomes unusable rather than when a class is renamed.
  */
 
-import { test, expect } from './fixtures'
+import { test, expect, goToSection, openNav } from './fixtures'
 
 test.describe('shell', () => {
   test('signs in and shows the navigation', async ({ page, signIn }) => {
     await signIn()
 
-    await expect(page.getByRole('navigation', { name: /notes navigation/i })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'My Notes' })).toBeVisible()
-    await expect(page.getByRole('link', { name: 'Trash' })).toBeVisible()
+    // On a phone the navigation is behind the toggle, so getting to it is part
+    // of what this asserts — a drawer that cannot be opened is not navigation.
+    await openNav(page)
+
+    const nav = page.getByRole('navigation', { name: /notes navigation/i })
+    await expect(nav).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Home' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'My Notes' })).toBeVisible()
+    await expect(nav.getByRole('link', { name: 'Trash' })).toBeVisible()
   })
 
   test('marks the current section for screen readers, not just visually', async ({ page, signIn }) => {
     await signIn()
 
-    await page.getByRole('link', { name: 'My Notes' }).click()
+    await goToSection(page, 'My Notes')
+
     // aria-current is what a screen reader announces; a green background alone
-    // tells a non-sighted user nothing.
-    await expect(page.getByRole('link', { name: 'My Notes' })).toHaveAttribute('aria-current', 'page')
+    // tells a non-sighted user nothing. On a phone the drawer closes behind the
+    // navigation and takes its links out of the accessibility tree, so it is
+    // reopened here — reading the mark the way assistive technology would.
+    await openNav(page)
+    await expect(page.getByRole('link', { name: 'My Notes' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
   })
 
   test('opens search from the header and from the keyboard', async ({ page, signIn }) => {
@@ -56,16 +68,19 @@ test.describe('shell', () => {
 
   test('says so when the connection is gone', async ({ page, signIn, context }) => {
     await signIn({ notes: [{ id: 'n1', title: 'Existing note', excerpt: 'body' }] })
-    await page.getByRole('link', { name: 'My Notes' }).click()
+    await goToSection(page, 'My Notes')
 
     await context.setOffline(true)
-    await page.getByRole('link', { name: 'Home' }).click()
+    await goToSection(page, 'Home')
 
     await expect(page.getByRole('button', { name: /offline/i })).toBeVisible({ timeout: 10_000 })
   })
 
   test('has a skip link for keyboard users', async ({ page, signIn }) => {
     await signIn()
+    // Tab only means anything once the app has rendered something to tab
+    // through; pressing it against an empty document focuses nothing.
+    await expect(page.getByRole('button', { name: /search anything/i })).toBeVisible()
 
     await page.keyboard.press('Tab')
     await expect(page.getByRole('link', { name: /skip to content/i })).toBeFocused()
@@ -92,7 +107,7 @@ test.describe('shell on a phone', () => {
 
   test('the page never scrolls sideways', async ({ page, signIn }) => {
     await signIn({ notes: [{ id: 'n1', title: 'A note with a fairly long title that could overflow', excerpt: 'x'.repeat(400) }] })
-    await page.getByRole('link', { name: 'My Notes' }).click()
+    await goToSection(page, 'My Notes')
 
     const overflows = await page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,

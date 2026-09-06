@@ -97,6 +97,19 @@
   font-weight: 600;
 }
 
+/* Quieter than the ungrounded warning: an answer that named no note is a gap
+   in the citations, not a claim the reader has to be stopped by. Carried by the
+   words and the icon, never by the colour. */
+.pulse-turn__unsourced {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin: 0;
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  line-height: 1.5;
+}
+
 .pulse-turn__answer { color: var(--notes-text-primary); font-size: var(--notes-text-base); line-height: 1.6; }
 .pulse-turn__answer p { margin: 0 0 var(--notes-space-2); white-space: pre-wrap; }
 .pulse-turn__answer p:last-child { margin-bottom: 0; }

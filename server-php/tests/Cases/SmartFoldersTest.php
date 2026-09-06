@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Aicountly\Api\Tests\Cases;
 
+use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Support\Uuid;
 use Aicountly\Api\Tests\ApiClient;
 use Aicountly\Api\Tests\Support;
@@ -310,6 +311,37 @@ final class SmartFoldersTest extends TestCase
         $this->assertSame(422, $notAnId['status']);
     }
 
+    /**
+     * A rule tree that is not one is refused, not read as "no rules".
+     *
+     * Both of these used to be accepted and folded to the default, which is the
+     * worst of the three options available: the caller is told the folder was
+     * saved, and the folder they get matches their whole library rather than
+     * the slice they described.
+     */
+    public function testRulesThatAreNotARuleTreeAreRefused(): void
+    {
+        $aList = $this->alice->post('/smart-folders', ['name' => 'Nonsense', 'rules' => [1, 2, 3]]);
+        $this->assertSame(422, $aList['status']);
+        $this->assertSame('VALIDATION_FAILED', $aList['body']['error']['code']);
+
+        $matchIsNotAWord = $this->alice->post('/smart-folders', [
+            'name' => 'Nonsense',
+            'rules' => ['match' => ['all'], 'conditions' => []],
+        ]);
+        $this->assertSame(422, $matchIsNotAWord['status']);
+
+        $this->assertCount(0, $this->alice->get('/smart-folders')['body']['data']);
+
+        // An empty rule tree is still a rule tree: a folder over everything is
+        // a thing people make, and `{}` and `[]` are the same value in PHP.
+        $this->assertSame(201, $this->alice->post('/smart-folders', ['name' => 'Everything', 'rules' => []])['status']);
+        $this->assertSame(
+            201,
+            $this->alice->post('/smart-folders', ['name' => 'Also everything', 'rules' => ['conditions' => []]])['status'],
+        );
+    }
+
     // -- Pagination and sort -------------------------------------------------
 
     public function testPaginatesAndSortsLikeTheNotesList(): void
@@ -503,5 +535,192 @@ final class SmartFoldersTest extends TestCase
         // changes it the same way everywhere else in the API does.
         $this->assertSame(['shared working paper'], $this->titles($this->bob, $folder['id']));
         $this->assertSame(1, $this->bob->get('/smart-folders')['body']['data'][0]['note_count']);
+    }
+
+    // -- A refused write leaves nothing behind -------------------------------
+
+    /**
+     * Regression: `position` used to be validated *after* the INSERT.
+     *
+     * The caller got a 422 and a folder: the sidebar grew a row the client had
+     * just been told did not exist, and it counted against the ceiling. A
+     * refused create must leave the account exactly as it found it.
+     */
+    public function testACreateRefusedForItsPositionStoresNothing(): void
+    {
+        $refused = $this->alice->post('/smart-folders', ['name' => 'Ghost', 'position' => 'third']);
+
+        $this->assertSame(422, $refused['status']);
+        $this->assertSame('VALIDATION_FAILED', $refused['body']['error']['code']);
+        $this->assertCount(0, $this->alice->get('/smart-folders')['body']['data'], 'no folder was created');
+    }
+
+    /**
+     * Regression: the same ordering, on the other side of the write.
+     *
+     * `PATCH {name, position}` used to commit the rename and only then refuse
+     * the position — a half-applied edit, which is exactly what
+     * {@see testAnEditCannotBreakAStoredFolder} guards against for rules.
+     */
+    public function testAnEditRefusedForItsPositionChangesNothing(): void
+    {
+        $first = $this->folder($this->alice, 'First', []);
+        $this->folder($this->alice, 'Second', []);
+
+        $refused = $this->alice->patch('/smart-folders/' . $first['id'], [
+            'name' => 'Renamed',
+            'icon' => 'star',
+            'position' => 'last',
+        ]);
+
+        $this->assertSame(422, $refused['status']);
+
+        $listed = $this->alice->get('/smart-folders')['body']['data'];
+        $this->assertSame('First', $listed[0]['name'], 'the rename was not committed');
+        $this->assertNull($listed[0]['icon']);
+        $this->assertSame(0, $listed[0]['position']);
+    }
+
+    // -- Ordering inside one company ----------------------------------------
+
+    /**
+     * A drag reorders the list the person is looking at, and only that list.
+     *
+     * `GET /smart-folders` is tenant-scoped — a company's folders are invisible
+     * from another company, personal folders follow their owner everywhere — so
+     * re-sequencing every folder the owner has, as this used to, was wrong
+     * twice over: an index counted against the visible list landed somewhere
+     * else in a longer hidden one (here, the drag was a no-op), and folders
+     * belonging to a company the caller was not acting in silently changed
+     * order in a sidebar nobody had touched.
+     */
+    public function testReorderingInOneCompanyLeavesAnotherCompanysOrderAlone(): void
+    {
+        $personal = new ApiClient(Support::user('a'));
+        $acme = new ApiClient(Support::user('a', 'acme'));
+        $beta = new ApiClient(Support::user('a', 'beta'));
+
+        $mine = $personal->post('/smart-folders', ['name' => 'Personal'])['body']['data'];
+        $acme->post('/smart-folders', ['name' => 'Acme one']);
+        $acme->post('/smart-folders', ['name' => 'Acme two']);
+        $beta->post('/smart-folders', ['name' => 'Beta one']);
+
+        $names = static fn (ApiClient $api): array => array_map(
+            static fn (array $folder): string => $folder['name'],
+            $api->get('/smart-folders')['body']['data'],
+        );
+
+        $this->assertSame(['Personal', 'Acme one', 'Acme two'], $names($acme));
+        $this->assertSame(['Personal', 'Beta one'], $names($beta));
+
+        // Drag the personal folder to the end of the list Beta is showing.
+        $this->assertSame(200, $beta->patch('/smart-folders/' . $mine['id'], ['position' => 1])['status']);
+
+        $this->assertSame(['Beta one', 'Personal'], $names($beta), 'the drag took effect where it happened');
+        $this->assertSame(
+            ['Acme one', 'Acme two'],
+            array_values(array_filter($names($acme), static fn (string $n): bool => $n !== 'Personal')),
+            "Acme's own folders kept the order Acme put them in",
+        );
+    }
+
+    // -- A page of folders is one query, and one bad folder is not fatal -----
+
+    /**
+     * A folder saved against a vocabulary this release dropped.
+     *
+     * The badge for every folder on the page is counted in one statement, so
+     * this is the case that matters: one uncountable folder must report itself
+     * as uncountable and leave the rest of the page correct. Its badge is
+     * *absent* rather than zero — zero would be a claim about the library, and
+     * what is actually known is only that the folder cannot be run.
+     *
+     * The row is planted directly because that is the only way to have one: the
+     * write path refuses these rules, which is the point of validating there.
+     */
+    public function testAFolderWhoseRulesNoLongerCompileDoesNotTakeThePageWithIt(): void
+    {
+        $this->note($this->alice, 'quarterly return', ['tags' => ['gst']]);
+        $this->note($this->alice, 'staff list', ['tags' => ['hr']]);
+
+        $this->folder($this->alice, 'GST', [['field' => 'tag', 'operator' => 'is', 'value' => 'gst']]);
+        $legacy = Uuid::v4();
+        Connection::execute(
+            'INSERT INTO smart_folders (id, tenant_id, owner_user_id, name, rules, position)
+             VALUES (:id, NULL, :owner, :name, :rules::jsonb, 1)',
+            [
+                'id' => $legacy,
+                'owner' => Support::user('a')->userId,
+                'name' => 'From an older release',
+                'rules' => '{"match":"all","conditions":[{"field":"retired_field","operator":"is","value":"x"}]}',
+            ],
+        );
+        $this->folder($this->alice, 'HR', [['field' => 'tag', 'operator' => 'is', 'value' => 'hr']]);
+
+        $page = $this->alice->get('/smart-folders');
+        $this->assertSame(200, $page['status']);
+        $this->assertCount(3, $page['body']['data']);
+
+        $byName = [];
+        foreach ($page['body']['data'] as $folder) {
+            $byName[$folder['name']] = $folder;
+        }
+
+        $this->assertFalse($byName['From an older release']['rules_valid']);
+        $this->assertFalse(
+            array_key_exists('note_count', $byName['From an older release']),
+            'an uncountable folder claims no number at all',
+        );
+
+        // The folders either side of it are still counted, and counted right.
+        $this->assertTrue($byName['GST']['rules_valid']);
+        $this->assertSame(1, $byName['GST']['note_count']);
+        $this->assertSame(1, $byName['HR']['note_count']);
+
+        // Opening it says why, rather than 500ing or quietly showing everything.
+        $opened = $this->alice->get('/smart-folders/' . $legacy . '/notes');
+        $this->assertSame(422, $opened['status']);
+        $this->assertSame('SMART_FOLDER_RULES_INVALID', $opened['body']['error']['code']);
+
+        // And it can still be renamed and deleted — otherwise it is unfixable.
+        $this->assertSame(200, $this->alice->patch('/smart-folders/' . $legacy, ['name' => 'Fixing'])['status']);
+        $this->assertSame(204, $this->alice->delete('/smart-folders/' . $legacy)['status']);
+    }
+
+    /**
+     * Every folder on the page gets its own count, and its own cap.
+     *
+     * One statement counts the whole page, so the risk it carries is one
+     * folder's filter or cap bleeding into another's. Three folders with three
+     * different answers — capped, exact, empty — is what catches that.
+     */
+    public function testEachFolderOnThePageIsCountedAgainstItsOwnRules(): void
+    {
+        putenv('NOTES_SMART_FOLDER_COUNT_CAP=2');
+
+        try {
+            foreach (['one', 'two', 'three'] as $title) {
+                $this->note($this->alice, $title, ['tags' => ['gst']]);
+            }
+            $this->note($this->alice, 'staff list', ['tags' => ['hr']]);
+
+            $this->folder($this->alice, 'GST', [['field' => 'tag', 'operator' => 'is', 'value' => 'gst']]);
+            $this->folder($this->alice, 'HR', [['field' => 'tag', 'operator' => 'is', 'value' => 'hr']]);
+            $this->folder($this->alice, 'VAT', [['field' => 'tag', 'operator' => 'is', 'value' => 'vat']]);
+
+            $byName = [];
+            foreach ($this->alice->get('/smart-folders')['body']['data'] as $folder) {
+                $byName[$folder['name']] = $folder;
+            }
+
+            $this->assertSame(2, $byName['GST']['note_count']);
+            $this->assertTrue($byName['GST']['note_count_is_capped']);
+            $this->assertSame(1, $byName['HR']['note_count']);
+            $this->assertFalse($byName['HR']['note_count_is_capped']);
+            $this->assertSame(0, $byName['VAT']['note_count']);
+            $this->assertFalse($byName['VAT']['note_count_is_capped']);
+        } finally {
+            putenv('NOTES_SMART_FOLDER_COUNT_CAP');
+        }
     }
 }

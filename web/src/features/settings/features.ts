@@ -13,6 +13,10 @@
  * Nothing here describes a capability the API does not have.
  */
 
+import { useQuery } from '@tanstack/react-query'
+
+import { fetchAppConfig } from '../../shared/api/client'
+import { queryKeys } from '../../shared/query/queryClient'
 import type { FeatureFlags } from '../../shared/api/types'
 
 export interface FeatureRow {
@@ -64,7 +68,7 @@ export const FEATURE_ROWS: FeatureRow[] = [
   {
     flag: 'private_notes',
     label: 'Private notes',
-    on: 'A note can be marked private: it is left out of retrieval, so Pulse never reads it.',
+    on: 'A note can be marked private: it is left out of retrieval, so Pulse never reads it — and out of search results, including your own.',
     off: 'Notes cannot be marked private on this deployment.',
   },
   {
@@ -99,4 +103,47 @@ export function describeFeature(flag: keyof FeatureFlags, enabled: boolean): str
   if (!row) return enabled ? 'Enabled on this deployment.' : 'Not enabled on this deployment.'
 
   return enabled ? row.on : row.off
+}
+
+// ---------------------------------------------------------------------------
+// Has the server actually answered?
+// ---------------------------------------------------------------------------
+
+export interface DeploymentAnswer {
+  /** The server has not said yet, so nothing derived from the flags is a fact. */
+  pending: boolean
+  /** Why the question could not be answered, or null. */
+  error: unknown
+  /** Ask again. */
+  retry: () => void
+}
+
+/**
+ * The state of `GET /config`, as opposed to its contents.
+ *
+ * `useAppConfig()` hands back an all-off fallback while the request is in
+ * flight and again when it fails. That is the right default for *hiding* a
+ * control — a Pulse button that 503s on click is worse than no Pulse button —
+ * and exactly the wrong one for the two pages whose job is to report what the
+ * server said. Rendering eleven "Off" rows, an environment of "unknown" and a
+ * 30-day retention nobody configured turns a client-side fallback into a claim
+ * about someone's deployment, and the most likely reason for it is that the
+ * reader is offline.
+ *
+ * This subscribes to the query the provider already owns — same key, and
+ * `fetchAppConfig` memoises its promise — so it reports that one request's
+ * state without issuing a second.
+ */
+export function useDeploymentAnswer(): DeploymentAnswer {
+  const query = useQuery({
+    queryKey: queryKeys.config,
+    queryFn: fetchAppConfig,
+    staleTime: Infinity,
+  })
+
+  return {
+    pending: query.isPending,
+    error: query.isError ? query.error : null,
+    retry: () => void query.refetch(),
+  }
 }

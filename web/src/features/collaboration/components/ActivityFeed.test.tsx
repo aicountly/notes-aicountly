@@ -112,4 +112,37 @@ describe('activity sentences', () => {
 
     expect(await screen.findByText('Priya shared this note with 2 people')).toBeInTheDocument()
   })
+
+  /**
+   * The server clamps `limit` to 200 and still reports `has_more` against the
+   * whole trail, so at the cap "show earlier" would fetch the same page for
+   * ever. It says so instead of offering a button that changes nothing.
+   */
+  it('stops offering more once the server will not return more', async () => {
+    fetchMock.mockImplementation(async (input: unknown) => {
+      const url = String(input)
+      if (url.includes('/members')) {
+        return envelope([{ user_id: 'u_priya', role: 'editor', display_name: 'Priya' }])
+      }
+      return envelope(
+        [
+          entry({ id: 'a1', action: 'member.added', context: { member_user_id: 'u_sam' } }),
+          entry({ id: 'a2', action: 'member.added', context: { member_user_id: 'u_lee' } }),
+        ],
+        // What the server says at the cap: more exist, but not in this page.
+        { total: 400, has_more: true },
+      )
+    })
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <ActivityFeed noteId="note-1" pageSize={200} />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('Priya shared this note with 2 people')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Show earlier activity/ })).not.toBeInTheDocument()
+    expect(screen.getByText(/Showing the 200 most recent entries/)).toBeInTheDocument()
+  })
 })

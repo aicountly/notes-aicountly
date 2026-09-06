@@ -24,6 +24,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import SettingsPage from './SettingsPage'
 import { AppConfigProvider } from '../../../app/AppConfigProvider'
 import { ThemeProvider } from '../../../shared/ui/ThemeProvider'
+import { ApiError } from '../../../shared/api/client'
 import type { AppConfig, FeatureFlags, Notebook } from '../../../shared/api/types'
 
 vi.mock('../../../auth/portal', () => ({ ensureSesKey: async () => 'test-session-key' }))
@@ -73,11 +74,17 @@ vi.mock('../../../shared/offline/syncEngine', () => ({ refreshPendingCount: asyn
 // The deployment's answer, swapped per test. Mocking the fetch rather than the
 // provider keeps AppConfigProvider — and its "everything is off while loading"
 // rule — in the test.
-const deployment = vi.hoisted(() => ({ config: null as unknown }))
+const deployment = vi.hoisted(() => ({ config: null as unknown, error: null as unknown }))
 
 vi.mock('../../../shared/api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../shared/api/client')>()
-  return { ...actual, fetchAppConfig: async () => deployment.config }
+  return {
+    ...actual,
+    fetchAppConfig: async () => {
+      if (deployment.error) throw deployment.error
+      return deployment.config
+    },
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -198,6 +205,7 @@ beforeEach(() => {
   device.notesCleared = 0
   device.clearFails = false
   deployment.config = makeConfig()
+  deployment.error = null
 
   fetchMock.mockReset()
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
@@ -284,6 +292,39 @@ describe('SettingsPage — this deployment', () => {
   })
 })
 
+describe('SettingsPage — before the deployment has answered', () => {
+  it("does not pass this app's own fallbacks off as the server's answer", () => {
+    renderPage()
+
+    // Eleven rows reading "Off" would be a guess wearing the clothes of a fact,
+    // and the likeliest reason for the guess is that the reader is offline.
+    const capabilities = section(/what this deployment can do/i)
+    expect(within(capabilities).getByText(/asking the server what it has switched on/i)).toBeInTheDocument()
+    expect(within(capabilities).queryAllByRole('listitem')).toHaveLength(0)
+    expect(screen.queryByText('Off')).not.toBeInTheDocument()
+
+    // 30 days and 25 MB are this app's defaults; nobody has configured them.
+    const about = section(/about this app/i)
+    expect(within(about).queryByText(/set on the server/i)).not.toBeInTheDocument()
+    expect(within(about).queryByText('unknown')).not.toBeInTheDocument()
+  })
+
+  it('says the server could not be asked, and offers to ask it again', async () => {
+    deployment.error = new ApiError('OFFLINE', 'You appear to be offline.', 0)
+    renderPage()
+
+    const capabilities = section(/what this deployment can do/i)
+    expect(
+      await within(capabilities).findByText('You appear to be offline.', undefined, { timeout: 4000 }),
+    ).toBeInTheDocument()
+    expect(within(capabilities).getByRole('button', { name: /ask the server again/i })).toBeInTheDocument()
+
+    const about = section(/about this app/i)
+    expect(within(about).getAllByText(/the server did not answer/i).length).toBeGreaterThan(0)
+    expect(within(about).queryByText(/30 days/)).not.toBeInTheDocument()
+  })
+})
+
 describe('SettingsPage — limits and build', () => {
   it("reports the server's limits, in human units and read-only", async () => {
     renderPage()
@@ -351,6 +392,24 @@ describe('SettingsPage — offline data', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).queryByText(/have not reached the server/i)).not.toBeInTheDocument()
     expect(within(dialog).getByText(/your notes stay on the server/i)).toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage — notes defaults', () => {
+  it('explains itself rather than offering a picker with nothing to pick', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/notebooks')) return envelope([])
+      throw new Error(`unexpected request: ${url}`)
+    })
+    renderPage()
+
+    expect(await screen.findByText(/you have no notebooks yet/i)).toBeInTheDocument()
+
+    // Default view and default order remain; only the notebook picker — whose
+    // one entry would have been "No notebook" — is gone.
+    const notes = section(/^notes$/i)
+    expect(within(notes).getAllByRole('combobox')).toHaveLength(2)
   })
 })
 

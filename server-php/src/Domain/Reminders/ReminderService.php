@@ -27,7 +27,11 @@ use Aicountly\Api\Support\Uuid;
  * Access is decided in two independent steps, both required:
  *
  *   1. **The row is yours.** `user_id` must be the caller, and the row's tenant
- *      must match the company they are acting in.
+ *      must match the company they are acting in. That tenant is copied from
+ *      the *note*, never from whoever happened to be logged in when the
+ *      reminder was set: a personal note is readable from every company
+ *      context, so stamping the acting company onto its reminder would leave a
+ *      row the list still shows and every write answers 404 to.
  *   2. **The note is still readable.** Every operation but deletion re-checks
  *      the note through {@see NotePermissionService}, so a reminder set while a
  *      note was shared stops being reachable when the share is withdrawn.
@@ -48,9 +52,10 @@ final class ReminderService
      *
      * `privacy_mode` travels with the id because requireNote refuses a private
      * note to anyone but its owner from that column — selecting the id alone
-     * would quietly skip that guard.
+     * would quietly skip that guard. `tenant_id` travels with it because the
+     * reminder inherits the note's company rather than the caller's.
      */
-    private const NOTE_COLUMNS = 'n.id, n.privacy_mode';
+    private const NOTE_COLUMNS = 'n.id, n.privacy_mode, n.tenant_id';
 
     /** Statuses that still have a firing ahead of them. */
     private const OPEN_STATUSES = ['scheduled', 'snoozed'];
@@ -76,6 +81,16 @@ final class ReminderService
 
     /** Thirty days. Beyond that a snooze is really a new due date. */
     private const MAX_SNOOZE_MINUTES = 43200;
+
+    /**
+     * The years a `timestamptz` column will take.
+     *
+     * Postgres reaches further than this in both directions; four digits is
+     * where a *reminder* stops being a date and starts being a typo, and it
+     * keeps the check to one comparison against a formatted year.
+     */
+    private const MIN_YEAR = 1;
+    private const MAX_YEAR = 9999;
 
     private const DEFAULT_TIMEZONE = 'UTC';
 
@@ -147,7 +162,7 @@ final class ReminderService
      */
     public function create(Identity $identity, string $noteId, array $input): array
     {
-        $this->permissions->requireNote($identity, $noteId, NotePermissionService::VIEW, columns: self::NOTE_COLUMNS);
+        $note = $this->permissions->requireNote($identity, $noteId, NotePermissionService::VIEW, columns: self::NOTE_COLUMNS);
 
         $dueAt = $this->timestamp($input['due_at'] ?? null, 'due_at');
         $timezone = $this->timezone($input['timezone'] ?? null);
@@ -176,7 +191,8 @@ final class ReminderService
                 'id' => $id,
                 'note_id' => $noteId,
                 'action_id' => $this->actionId($noteId, $input['action_id'] ?? null),
-                'tenant_id' => $identity->tenantId,
+                // The note's company, not the caller's: see the class docblock.
+                'tenant_id' => $note['tenant_id'] === null ? null : (string) $note['tenant_id'],
                 'user' => $identity->userId,
                 'type' => $rule === null ? 'datetime' : 'recurring',
                 'due_at' => $dueAt->format(\DateTimeInterface::RFC3339),
@@ -228,14 +244,18 @@ final class ReminderService
             $timingChanged = true;
         }
 
-        // The rule is re-resolved whenever the anchor moves as well as when the
-        // rule itself changes: a `COUNT` was turned into an absolute end date
-        // against the old start (see RecurrenceRule::withCountResolved), and
-        // leaving it there would end the series in the wrong place.
+        // The rule is re-checked whenever the anchor moves as well as when the
+        // rule itself changes. A `COUNT` was turned into an absolute end date
+        // at write time (see RecurrenceRule::withCountResolved), so moving the
+        // reminder past that date would leave a row still labelled `recurring`
+        // whose series is already over — `recurrence()` refuses that rather
+        // than let it repeat exactly never.
         $storedRule = $row['recurrence_rule'] === null ? null : (string) $row['recurrence_rule'];
-        $ruleInput = array_key_exists('recurrence_rule', $input) ? $input['recurrence_rule'] : $storedRule;
-        if (array_key_exists('recurrence_rule', $input) || ($storedRule !== null && $timingChanged)) {
-            $rule = $this->recurrence($ruleInput, $dueAt, $timezone);
+        $ruleSent = array_key_exists('recurrence_rule', $input);
+        $ruleInput = $ruleSent ? $input['recurrence_rule'] : $storedRule;
+        if ($ruleSent || ($storedRule !== null && $timingChanged)) {
+            // The complaint belongs to whichever half the caller actually sent.
+            $rule = $this->recurrence($ruleInput, $dueAt, $timezone, $ruleSent ? 'recurrence_rule' : 'due_at');
             $updates[] = 'recurrence_rule = :rule';
             $updates[] = 'reminder_type = :type';
             $bindings['rule'] = $rule?->toString();
@@ -296,9 +316,16 @@ final class ReminderService
             ['id' => $reminderId, 'user' => $identity->userId],
         );
 
-        $this->activity->record($identity, ActivityRecorder::REMINDER_CLEARED, (string) $row['note_id'], null, [
-            'reminder_id' => $reminderId,
-        ]);
+        // Removing your own row is allowed without note access; writing to that
+        // note's trail is not. The trail belongs to the note and is read by
+        // everyone on it, so a former collaborator must not still be able to
+        // append to it — the deletion succeeds either way, silently.
+        $noteId = (string) $row['note_id'];
+        if ($this->permissions->roleFor($identity, $noteId) !== null) {
+            $this->activity->record($identity, ActivityRecorder::REMINDER_CLEARED, $noteId, null, [
+                'reminder_id' => $reminderId,
+            ]);
+        }
     }
 
     /**
@@ -537,9 +564,18 @@ final class ReminderService
      *
      * `null` clears the rule; an empty string does the same, because that is
      * what a cleared form field sends.
+     *
+     * `$field` names the half of the request the caller can act on: a rule
+     * that has already ended is the *rule's* fault when they sent one, and the
+     * *date's* fault when they moved a reminder past the end of a series they
+     * set earlier.
      */
-    private function recurrence(mixed $value, \DateTimeImmutable $dueAt, \DateTimeZone $timezone): ?RecurrenceRule
-    {
+    private function recurrence(
+        mixed $value,
+        \DateTimeImmutable $dueAt,
+        \DateTimeZone $timezone,
+        string $field = 'recurrence_rule',
+    ): ?RecurrenceRule {
         if ($value === null || $value === '') {
             return null;
         }
@@ -547,7 +583,29 @@ final class ReminderService
             throw ApiException::validation(['recurrence_rule' => 'A recurrence rule must be an RRULE string.']);
         }
 
-        return RecurrenceRule::parse($value)->withCountResolved($dueAt, $timezone);
+        $rule = RecurrenceRule::parse($value)->withCountResolved($dueAt, $timezone);
+
+        // A series whose end is already behind the reminder's own due date is a
+        // repeat that will never repeat: the row would say `recurring`, the
+        // client would draw the repeat icon, and completing it once would
+        // finish it for good. Refusing is the same bargain RecurrenceRule makes
+        // about the parts it does not support — say no, rather than store
+        // something that quietly does nothing.
+        if ($rule->until !== null && $rule->until < $dueAt) {
+            throw ApiException::validation([$field => sprintf(
+                'This repeat ends on %s, which is before the reminder is due on %s. Move the reminder earlier, extend the rule, or clear the repeat.',
+                self::humanInstant($rule->until),
+                self::humanInstant($dueAt),
+            )]);
+        }
+
+        return $rule;
+    }
+
+    /** A UTC instant a person can read back in an error message. */
+    private static function humanInstant(\DateTimeImmutable $instant): string
+    {
+        return $instant->setTimezone(new \DateTimeZone('UTC'))->format('j M Y H:i') . ' UTC';
     }
 
     /** An action on this note, or null. Bound to the note so an id cannot borrow another's. */
@@ -581,10 +639,25 @@ final class ReminderService
         }
 
         try {
-            return (new \DateTimeImmutable((string) $value))->setTimezone(new \DateTimeZone('UTC'));
+            $instant = (new \DateTimeImmutable((string) $value))->setTimezone(new \DateTimeZone('UTC'));
         } catch (\Throwable) {
             throw ApiException::validation([$field => 'Use an ISO-8601 date and time.']);
         }
+
+        // PHP will happily parse `+300000-01-15T09:00:00Z`; `timestamptz` will
+        // not store it, and the refusal arrives as a PDOException from inside
+        // the INSERT — a 500 for what is only a malformed date. Bounded here,
+        // where the answer is still a 422 the caller can act on.
+        $year = (int) $instant->format('Y');
+        if ($year < self::MIN_YEAR || $year > self::MAX_YEAR) {
+            throw ApiException::validation([$field => sprintf(
+                'That date is out of range. Use a year between %d and %d.',
+                self::MIN_YEAR,
+                self::MAX_YEAR,
+            )]);
+        }
+
+        return $instant;
     }
 
     /**

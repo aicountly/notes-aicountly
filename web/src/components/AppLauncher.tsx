@@ -11,19 +11,37 @@ import {
 import type { LauncherTile } from '../services/appLauncher'
 import { useLauncherTileIcon } from '../services/useLauncherTileIcon'
 
+/**
+ * Positioned by whoever renders it, and coloured by the host application.
+ *
+ * Two things about this block were written for a different home and are worth
+ * knowing before editing it. The wrapper used to be `position: fixed` at the
+ * top-left corner, which suited the placeholder dashboard it floated over but
+ * made it overlap the header controls once the launcher moved into the top bar
+ * — on a phone it sat directly on top of the navigation toggle and swallowed
+ * its clicks. It is now `relative`, the same as Pulse's launcher
+ * (`components/shell/AppLauncher.jsx`, `relative inline-block shrink-0`), so it
+ * takes its place in the header's flex row.
+ *
+ * The colours were literals from the same era, which meant a white panel with
+ * near-black text in dark mode. Each one now reads a `--notes-*` token first
+ * and keeps the original literal as the fallback, so the component still
+ * renders correctly if it is ever dropped into a page that does not load the
+ * Notes token sheet.
+ */
 const S: Record<string, CSSProperties> = {
-  wrap: { position: 'fixed', top: 16, left: 16, zIndex: 1000, display: 'inline-block' },
+  wrap: { position: 'relative', display: 'inline-block', flexShrink: 0 },
   trigger: {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 8,
-    border: '1px solid var(--border, #e4e4e7)',
-    borderRadius: 8,
-    background: 'var(--bg, #fff)',
-    color: 'var(--fg, #18181b)',
+    border: '1px solid var(--notes-border, #e4e4e7)',
+    borderRadius: 'var(--notes-radius-sm, 8px)',
+    background: 'var(--notes-surface, #fff)',
+    color: 'var(--notes-text-primary, #18181b)',
     cursor: 'pointer',
-    boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+    boxShadow: 'var(--notes-shadow-xs, 0 1px 2px rgba(0,0,0,0.05))',
   },
   panel: {
     position: 'absolute',
@@ -34,22 +52,27 @@ const S: Record<string, CSSProperties> = {
     width: 'min(28rem, calc(100vw - 2rem))',
     maxWidth: 448,
     padding: 16,
-    borderRadius: 12,
-    border: '1px solid #e2e8f0',
-    background: '#fff',
-    boxShadow: '0 10px 40px rgba(15, 23, 42, 0.12)',
+    borderRadius: 'var(--notes-radius-md, 12px)',
+    border: '1px solid var(--notes-border, #e2e8f0)',
+    background: 'var(--notes-surface-raised, #fff)',
+    boxShadow: 'var(--notes-shadow-lg, 0 10px 40px rgba(15, 23, 42, 0.12))',
   },
-  title: { margin: 0, fontSize: 14, fontWeight: 700, color: '#0f172a' },
-  subtitle: { margin: '4px 0 0', fontSize: 12, color: '#64748b', lineHeight: 1.4 },
+  title: { margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--notes-text-primary, #0f172a)' },
+  subtitle: {
+    margin: '4px 0 0',
+    fontSize: 12,
+    color: 'var(--notes-text-secondary, #64748b)',
+    lineHeight: 1.4,
+  },
   search: {
     width: '100%',
     marginTop: 12,
     marginBottom: 4,
     padding: '8px 10px',
-    borderRadius: 8,
-    border: '1px solid #e2e8f0',
-    background: '#fff',
-    color: '#0f172a',
+    borderRadius: 'var(--notes-radius-sm, 8px)',
+    border: '1px solid var(--notes-border, #e2e8f0)',
+    background: 'var(--notes-surface, #fff)',
+    color: 'var(--notes-text-primary, #0f172a)',
     fontSize: 13,
     outline: 'none',
   },
@@ -57,7 +80,7 @@ const S: Record<string, CSSProperties> = {
     gridColumn: '1 / -1',
     margin: '8px 0',
     fontSize: 12,
-    color: '#64748b',
+    color: 'var(--notes-text-secondary, #64748b)',
     textAlign: 'center',
   },
   grid: {
@@ -74,15 +97,15 @@ const S: Record<string, CSSProperties> = {
     alignItems: 'center',
     gap: 8,
     padding: 12,
-    borderRadius: 12,
-    border: '1px solid #e2e8f0',
-    background: '#fff',
+    borderRadius: 'var(--notes-radius-md, 12px)',
+    border: '1px solid var(--notes-border, #e2e8f0)',
+    background: 'var(--notes-surface, #fff)',
     cursor: 'pointer',
     textAlign: 'center',
   },
   tileCurrent: {
-    border: '1px solid #93c5fd',
-    background: '#eff6ff',
+    border: '1px solid var(--notes-primary-border, #93c5fd)',
+    background: 'var(--notes-primary-soft, #eff6ff)',
     cursor: 'default',
   },
   icon: {
@@ -91,19 +114,24 @@ const S: Record<string, CSSProperties> = {
     height: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 'var(--notes-radius-md, 12px)',
     fontSize: 13,
     fontWeight: 700,
     color: '#fff',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+    boxShadow: 'var(--notes-shadow-sm, 0 1px 3px rgba(0,0,0,0.12))',
   },
-  name: { fontSize: 12, fontWeight: 600, color: '#0f172a', lineHeight: 1.25 },
+  name: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: 'var(--notes-text-primary, #0f172a)',
+    lineHeight: 1.25,
+  },
   footer: {
     marginTop: 12,
     paddingTop: 12,
-    borderTop: '1px solid #f1f5f9',
+    borderTop: '1px solid var(--notes-border, #f1f5f9)',
     fontSize: 10,
-    color: '#94a3b8',
+    color: 'var(--notes-text-tertiary, #94a3b8)',
     lineHeight: 1.4,
   },
 }

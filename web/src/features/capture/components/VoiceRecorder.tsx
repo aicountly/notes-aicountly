@@ -441,6 +441,15 @@ export function VoiceRecorder({ onSave, onCancel }: VoiceRecorderProps) {
   const paused = state.status === 'paused'
   const live = recording || paused
 
+  /**
+   * Whether there is actually a file to attach.
+   *
+   * `stop()` moves the machine to `recorded` at once, but the bytes only exist
+   * when `MediaRecorder.onstop` has assembled them — a gap of a frame or two in
+   * which "Attach to note" would have been a button that did nothing at all.
+   */
+  const clipReady = clipUrl !== null
+
   return (
     <div className="voice">
       <div className="voice__stage">
@@ -514,10 +523,10 @@ export function VoiceRecorder({ onSave, onCancel }: VoiceRecorderProps) {
             <Button
               variant="primary"
               icon="check"
-              loading={state.status === 'saving'}
+              loading={state.status === 'saving' || !clipReady}
               onClick={() => void save()}
             >
-              Attach to note
+              {clipReady ? 'Attach to note' : 'Finishing the recording…'}
             </Button>
             <Button icon="trash" disabled={state.status === 'saving'} onClick={discard}>
               Discard

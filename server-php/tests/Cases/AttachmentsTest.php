@@ -532,4 +532,76 @@ final class AttachmentsTest extends TestCase
             '/notes/' . $note['id'] . '/attachments/' . Uuid::v4() . '/content',
         )['status']);
     }
+    /**
+     * A Drive deployment's uploads are objects the worker cannot reach.
+     *
+     * Drive is called on the caller's own ses_key, which a cron worker does not
+     * have and must not be given — the same reason
+     * {@see \Aicountly\Api\Domain\Attachments\AttachmentService::enqueueProcessing()}
+     * queues nothing for a Drive-stored file. A purge job queued anyway cannot
+     * do the work: it refuses, retries five times with backoff and settles as a
+     * permanent red row, on every deletion, for ever. The bytes staying in Drive
+     * is a documented limitation (docs/DRIVE_INTEGRATION.md, "What is not
+     * done"); a queue that reports it as five failures is not.
+     */
+    public function testDeletingADriveStoredFileQueuesNoJobItCannotRun(): void
+    {
+        $note = $this->note();
+        $attachment = $this->upload($this->alice, $note['id'], 'receipt.png', self::png())['body']['data'];
+
+        // What a deployment with NOTES_DRIVE_ENABLED=true writes: Drive holds
+        // the bytes and names them, and `drive_file_id` stays null because this
+        // is a file Notes uploaded rather than one the user linked.
+        Connection::execute(
+            "UPDATE note_attachments
+                SET storage_provider = 'drive', storage_key = 'DOC04821', drive_file_id = NULL
+              WHERE id = :id",
+            ['id' => $attachment['id']],
+        );
+
+        $this->assertSame(204, $this->alice->delete(
+            '/notes/' . $note['id'] . '/attachments/' . $attachment['id'],
+        )['status']);
+
+        $this->assertNull(Connection::selectOne(
+            'SELECT id FROM note_processing_jobs WHERE job_type = \'attachment.object_purge\'',
+        ), 'no job was queued that the worker cannot possibly run');
+
+        // Detached all the same: the note stops showing the file either way.
+        $this->assertCount(0, $this->alice->get('/notes/' . $note['id'] . '/attachments')['body']['data']);
+    }
+
+    /**
+     * Detaching does not depend on Drive answering.
+     *
+     * Dropping the note↔document cross-reference is best-effort — the user
+     * asked to take the file off the note, and Drive being unreachable is not a
+     * reason to refuse that. The delete runs its Drive call from inside the
+     * transaction with the caller's session, so this is also the case that
+     * catches a variable the closure forgot to capture.
+     */
+    public function testDetachingSucceedsEvenWithDriveOnAndUnreachable(): void
+    {
+        $note = $this->note();
+        $attachment = $this->upload($this->alice, $note['id'], 'receipt.png', self::png())['body']['data'];
+        Connection::execute(
+            "UPDATE note_attachments
+                SET storage_provider = 'drive', storage_key = 'DOC04821', drive_file_id = 'DOC04821'
+              WHERE id = :id",
+            ['id' => $attachment['id']],
+        );
+
+        putenv('NOTES_DRIVE_ENABLED=true');
+        putenv('DRIVE_API_URL=http://127.0.0.1:9');
+
+        try {
+            $result = $this->alice->delete('/notes/' . $note['id'] . '/attachments/' . $attachment['id']);
+        } finally {
+            putenv('NOTES_DRIVE_ENABLED=false');
+            putenv('DRIVE_API_URL=');
+        }
+
+        $this->assertSame(204, $result['status']);
+        $this->assertCount(0, $this->alice->get('/notes/' . $note['id'] . '/attachments')['body']['data']);
+    }
 }

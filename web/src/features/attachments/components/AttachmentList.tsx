@@ -38,6 +38,11 @@ import '../attachments.css'
  * sandbox — and because the catalog entry's id is `docs`, which is Drive's
  * product code rather than its hostname. Hard-coding either is how a sandbox
  * build ends up telling people to paste a production link.
+ *
+ * Used to name Drive in this dialog, not to build a link into it: Drive's SPA
+ * routes documents by *scope* (`/documents/:scope?` —
+ * `drive-react-app/web/src/constants/routes.js`) and has no per-document URL at
+ * all, so there is no address of a single file to show as an example.
  */
 function driveOrigin(): string {
   const drive = getAppById('docs')
@@ -47,9 +52,15 @@ function driveOrigin(): string {
 /**
  * A Drive file id, from an id or from a link to it.
  *
- * People paste the address bar, not the id. Anything that is not a URL is
- * taken as an id and handed to the server, which is the thing that decides
- * whether it exists and whether this person may see it.
+ * The id is what to ask for, because Drive has no per-document URL today —
+ * `/documents/personal` and `/documents/trash` are lists, so the last segment
+ * of a real Drive address is a scope name and not a file. The URL branch stays
+ * anyway: people paste address bars, it costs one regex, and it means the day
+ * Drive gains `?id=` or a document route this field already understands it.
+ *
+ * Anything that is not a URL is taken as an id and handed to the server, which
+ * is the thing that decides whether it exists and whether this person may see
+ * it.
  */
 export function parseDriveFileId(input: string): string {
   const trimmed = input.trim()
@@ -85,7 +96,8 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
   const [driveInput, setDriveInput] = useState('')
   const [driveError, setDriveError] = useState<string | null>(null)
   const [driveBusy, setDriveBusy] = useState(false)
-  const [removeError, setRemoveError] = useState<string | null>(null)
+  /** One line for anything that went wrong outside the list itself. */
+  const [panelError, setPanelError] = useState<string | null>(null)
   const driveFieldId = useId()
   const headingId = useId()
 
@@ -99,11 +111,11 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
   }
 
   const onDelete = async (attachment: Attachment) => {
-    setRemoveError(null)
+    setPanelError(null)
     try {
       await attachments.remove(attachment.id)
     } catch (error) {
-      setRemoveError(
+      setPanelError(
         error instanceof ApiError ? error.message : `${attachment.filename} could not be removed.`,
       )
     }
@@ -112,24 +124,38 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
   /**
    * A capture dialog's upload.
    *
-   * Failures are pulled back out of the tray and re-thrown, so the message
-   * lands in the dialog the user is looking at rather than on a row hidden
-   * behind it — and the recorder or scanner keeps what it captured.
+   * Failures are pulled back out of the tray, because the dialog in front of
+   * the user is where the message has to land — a row behind an overlay is a
+   * message nobody reads.
+   *
+   * The partial case is the one worth being careful about. A scan of five
+   * pages where the fourth is refused has already stored three files; throwing
+   * would leave the scanner holding all five, and saving again would attach
+   * the first three a second time. So a partial run closes the dialog and
+   * reports what did not make it, and only a run that stored nothing is thrown
+   * back for the user to try again with what they captured still in hand.
    */
   const uploadFromDialog = async (files: File[]) => {
+    setPanelError(null)
     const outcome = await attachments.upload(files)
+    outcome.failed.forEach((row) => attachments.dismissPending(row.key))
 
-    if (outcome.failed.length > 0) {
-      outcome.failed.forEach((row) => attachments.dismissPending(row.key))
-      throw new Error(outcome.failed.map((row) => row.message).join(' '))
+    if (outcome.failed.length === 0) {
+      close()
+      return
     }
+
+    const reasons = outcome.failed.map((row) => row.message).join(' ')
+    if (outcome.stored.length === 0) throw new Error(reasons)
+
+    setPanelError(reasons)
     close()
   }
 
   const attachDrive = async () => {
     const id = parseDriveFileId(driveInput)
     if (id === '') {
-      setDriveError('Paste a Drive link, or the file’s id.')
+      setDriveError('Enter the file’s id in Drive.')
       return
     }
 
@@ -146,6 +172,15 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
       setDriveBusy(false)
     }
   }
+
+  const pendingRows = attachments.pending.map((item) => (
+    <PendingAttachmentBlock
+      key={item.key}
+      item={item}
+      onRetry={attachments.retryPending}
+      onDismiss={attachments.dismissPending}
+    />
+  ))
 
   const body = () => {
     if (attachments.isPending) {
@@ -169,7 +204,14 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
     }
 
     if (attachments.isError && attachments.error) {
-      return <ErrorNotice error={attachments.error} onRetry={attachments.refetch} />
+      // A failed read says nothing about a file this device is still holding,
+      // so the queue stays on screen underneath the explanation.
+      return (
+        <>
+          <ErrorNotice error={attachments.error} onRetry={attachments.refetch} />
+          {pendingRows.length > 0 ? <ul className="att-list">{pendingRows}</ul> : null}
+        </>
+      )
     }
 
     if (attachments.attachments.length === 0 && attachments.pending.length === 0) {
@@ -195,14 +237,7 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
 
     return (
       <ul className="att-list">
-        {attachments.pending.map((item) => (
-          <PendingAttachmentBlock
-            key={item.key}
-            item={item}
-            onRetry={attachments.retryPending}
-            onDismiss={attachments.dismissPending}
-          />
-        ))}
+        {pendingRows}
         {attachments.attachments.map((attachment) => (
           <AttachmentBlock
             key={attachment.id}
@@ -263,10 +298,18 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
         }}
       />
 
-      {removeError ? (
+      {panelError ? (
         <p className="att-panel__error" role="alert">
           <Icon name="alert" size={14} />
-          {removeError}
+          <span>{panelError}</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="close"
+            iconOnly
+            aria-label="Dismiss this message"
+            onClick={() => setPanelError(null)}
+          />
         </p>
       ) : null}
 
@@ -337,14 +380,14 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
       >
         <div className="editor-field">
           <label className="editor-field__label" htmlFor={driveFieldId}>
-            Drive link or file id
+            File id from {driveOrigin().replace(/^https?:\/\//, '')}
           </label>
           <input
             id={driveFieldId}
             className="editor-field__input"
             data-autofocus
             value={driveInput}
-            placeholder={`${driveOrigin()}/documents/…`}
+            placeholder="4821"
             onChange={(event) => setDriveInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {

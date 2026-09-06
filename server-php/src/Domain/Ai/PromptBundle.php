@@ -45,6 +45,15 @@ final class PromptBundle
     /** @var array<int, array{note_id: ?string, title: ?string, block_id: ?string, text: string}> */
     private array $items = [];
 
+    /**
+     * For each block that was kept, its index in the list {@see withContext()}
+     * was handed. Block numbering is what a citation resolves through, so the
+     * two lists must never be assumed to line up: see {@see contextSources()}.
+     *
+     * @var array<int, int>
+     */
+    private array $sources = [];
+
     private function __construct(
         public readonly string $action,
         public readonly string $outputShape,
@@ -99,14 +108,17 @@ final class PromptBundle
         );
 
         $budget = self::MAX_CONTEXT_CHARS;
-        foreach ($items as $item) {
+        foreach (array_values($items) as $index => $item) {
             $text = $this->clean((string) ($item['text'] ?? ''));
             if ($text === '' || $budget <= 0) {
+                // Dropped, and remembered as dropped. A block that never
+                // reached the model must not leave a citation behind it.
                 continue;
             }
             $text = Str::limit($text, min(self::MAX_ITEM_CHARS, $budget));
             $budget -= mb_strlen($text, 'UTF-8');
 
+            $clone->sources[] = $index;
             $clone->items[] = [
                 'note_id' => isset($item['note_id']) && $item['note_id'] !== null ? (string) $item['note_id'] : null,
                 'title' => isset($item['title']) && $item['title'] !== null
@@ -202,6 +214,23 @@ final class PromptBundle
     public function contextItems(): array
     {
         return $this->items;
+    }
+
+    /**
+     * Where each block came from in the list this bundle was built from.
+     *
+     * `withContext()` drops items — one whose text is empty once the control
+     * characters are stripped, or one past the context budget — and doing so
+     * renumbers every block after it. The caller holds a citation per *source*
+     * item, so without this the model's "[2]" would be resolved against the
+     * second source rather than the second block, and the answer would cite a
+     * note whose text was never sent. {@see NotesAIService} realigns on this.
+     *
+     * @return array<int, int> Source index per block, in block order.
+     */
+    public function contextSources(): array
+    {
+        return $this->sources;
     }
 
     public function requiresCitations(): bool

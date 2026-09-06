@@ -10,6 +10,7 @@ use Aicountly\Api\Features;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Http\CompanyContext;
 use Aicountly\Api\Integrations\AicountlyClient;
+use Aicountly\Api\Integrations\DriveAttachmentService;
 use Aicountly\Api\Integrations\DriveContext;
 use Aicountly\Api\Integrations\DriveDocumentService;
 use Aicountly\Api\Integrations\DriveObjectStore;
@@ -366,6 +367,72 @@ final class DriveUploadTest extends TestCase
             $this->assertCount(1, $transport->calls, 'one call, and no body came back through this API');
             $this->assertSame('GET', $transport->calls[0]['method']);
             $this->assertContainsString('/api/documents/4821/download', $transport->calls[0]['url']);
+        });
+    }
+
+    // -- Linking a file the user already has --------------------------------
+
+    /**
+     * The name and the type come from the version, because on this route they
+     * are nowhere else.
+     *
+     * `GET /api/documents/{id}` runs `DocumentService::getDocumentDetails()`,
+     * whose row comes from `PermissionService::getDocumentForCtx()` —
+     * `SELECT * FROM documents`, a table with no filename and no mime column.
+     * `formatDocumentRow()` reads them from `current_filename` / `current_mime`,
+     * aliases that only the *list* query's join to `document_versions` produces,
+     * so on this route they are null every single time. The reply below is that
+     * shape exactly; reading the top level would fail every link.
+     */
+    public function testALinkedFileIsDescribedFromItsCurrentVersion(): void
+    {
+        $this->withDrive(function (): void {
+            $transport = new RecordingTransport([
+                RecordingTransport::json(200, [
+                    'id' => 4821,
+                    'title' => 'board pack.png',
+                    'size_bytes' => 40,
+                    // Null on this route, always. See the note above.
+                    'filename' => null,
+                    'mime_type' => null,
+                    'checksum_sha256' => null,
+                    'versions' => [
+                        [
+                            'version_no' => '2.0',
+                            'is_current' => 1,
+                            'filename' => 'board pack v2.png',
+                            'mime_type' => 'image/png',
+                            'size_bytes' => 40,
+                            'checksum_sha256' => str_repeat('a', 64),
+                        ],
+                        [
+                            'version_no' => '1.0',
+                            'is_current' => 0,
+                            'filename' => 'board pack.png',
+                            'mime_type' => 'image/png',
+                            'size_bytes' => 12,
+                            'checksum_sha256' => str_repeat('b', 64),
+                        ],
+                    ],
+                ]),
+            ]);
+
+            $file = (new DriveAttachmentService(
+                new AicountlyClient('drive', Features::DRIVE, 'drive', $transport),
+            ))->file(DriveContext::forNote(self::SES_KEY, self::NOTE_ID, null), '4821');
+
+            $this->assertSame('board pack v2.png', $file['filename']);
+            $this->assertSame('image/png', $file['mime_type']);
+            $this->assertSame(40, $file['byte_size']);
+            $this->assertSame(str_repeat('a', 64), $file['checksum']);
+
+            // Drive's own document route, and the caller's session on it.
+            $this->assertSame('GET', $transport->calls[0]['method']);
+            $this->assertContainsString('/api/documents/4821', $transport->calls[0]['url']);
+            $this->assertContainsString(
+                'Authorization: Bearer ' . self::SES_KEY,
+                implode("\n", $transport->calls[0]['headers']),
+            );
         });
     }
 

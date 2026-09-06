@@ -11,6 +11,7 @@
  * from, and whether it came from the user's notes at all.
  */
 
+import type { ComponentProps } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -31,6 +32,7 @@ vi.mock('../../../app/AppConfigProvider', () => ({
 
 const NOTE_ID = '8b1c0c2e-0000-4000-8000-0000000000aa'
 const SOURCE_ID = '8b1c0c2e-0000-4000-8000-0000000000cc'
+const NOTEBOOK_ID = '8b1c0c2e-0000-4000-8000-0000000000bb'
 
 const fetchMock = vi.fn()
 
@@ -55,7 +57,7 @@ function answer(overrides: Partial<PulseAnswer> = {}): PulseAnswer {
   }
 }
 
-function renderPanel() {
+function renderPanel(props: Partial<ComponentProps<typeof PulsePanel>> = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -63,10 +65,17 @@ function renderPanel() {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <PulsePanel noteId={NOTE_ID} noteTitle="Acme contract" />
+        <PulsePanel noteId={NOTE_ID} noteTitle="Acme contract" {...props} />
       </MemoryRouter>
     </QueryClientProvider>,
   )
+}
+
+/** The one request the panel made, as the server would read it. */
+function sent(): { url: string; body: unknown } {
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+
+  return { url, body: JSON.parse(String(init.body)) as unknown }
 }
 
 async function ask(user: ReturnType<typeof userEvent.setup>, question = 'When does the contract renew?') {
@@ -174,6 +183,34 @@ describe('PulsePanel', () => {
     await waitFor(() => expect(screen.queryByText(/Reading this note to answer/)).not.toBeInTheDocument())
     expect(screen.getByLabelText('Your question')).toHaveValue('When does the contract renew?')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('sends a question to the endpoint the chosen scope names, with only that scope’s id', async () => {
+    const user = userEvent.setup()
+    renderPanel({ notebookId: NOTEBOOK_ID, notebookName: 'Contracts' })
+
+    await user.click(screen.getByLabelText('This notebook'))
+    await ask(user)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(sent().url).toContain(`/pulse/notebook/${NOTEBOOK_ID}/ask`)
+  })
+
+  it('answers “All my notes” from all of them, not from whichever notebook is open', async () => {
+    const user = userEvent.setup()
+    renderPanel({ notebookId: NOTEBOOK_ID, notebookName: 'Contracts' })
+
+    await user.click(screen.getByLabelText('All my notes'))
+    await ask(user)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    const { url, body } = sent()
+
+    // `notebook_id` in this body would make the server scope retrieval to that
+    // one notebook — which is the option immediately above this one. The
+    // widest scope has to actually be the widest, or the two radios are one.
+    expect(url).toContain('/pulse/notes/ask')
+    expect(body).toEqual({ question: 'When does the contract renew?' })
   })
 
   it('keeps the question when the server refuses, and shows what it said', async () => {

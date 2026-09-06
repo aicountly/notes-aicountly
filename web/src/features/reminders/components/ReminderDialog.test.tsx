@@ -11,8 +11,9 @@
  * string is the only part of this the user cannot check for themselves.
  */
 
+import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -223,5 +224,54 @@ describe('ReminderDialog recurrence', () => {
 
     expect(screen.getByLabelText('Repeat')).toHaveValue('WEEKLY')
     expect(screen.getByText('Every week')).toBeInTheDocument()
+  })
+
+  /**
+   * The page behind an open dialog re-renders for all sorts of reasons — a
+   * background refetch of the reminder list, a mutation settling. `Dialog`
+   * rebuilds its focus trap whenever `onClose` changes identity, and rebuilding
+   * it puts focus back on the dialog's first field. A caller passing an inline
+   * arrow would therefore throw the user out of whichever field they were
+   * filling in, once per render, which is why the handler this dialog hands
+   * down is latched rather than passed straight through.
+   */
+  it('leaves focus where the user put it when the page behind it re-renders', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+
+    function Host() {
+      const [open, setOpen] = useState(false)
+      const [renders, setRenders] = useState(0)
+
+      return (
+        <QueryClientProvider client={client}>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open
+          </button>
+          <button type="button" onClick={() => setRenders((count) => count + 1)}>
+            Re-render {renders}
+          </button>
+          {open ? (
+            <ReminderDialog open noteId={NOTE_ID} onClose={() => setOpen(false)} />
+          ) : null}
+        </QueryClientProvider>
+      )
+    }
+
+    render(<Host />)
+    await user.click(screen.getByRole('button', { name: 'Open' }))
+
+    const time = screen.getByLabelText('Time')
+    await waitFor(() => expect(screen.getByLabelText('Date')).toHaveFocus())
+
+    time.focus()
+    await act(async () => {
+      screen.getByRole('button', { name: /Re-render/ }).click()
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    })
+
+    expect(time).toHaveFocus()
   })
 })

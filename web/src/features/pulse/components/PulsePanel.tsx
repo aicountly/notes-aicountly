@@ -103,14 +103,23 @@ export function PulsePanel({
   // because a frame with a heading is furniture for a feature that is not here.
   if (!enabled) return <PulseUnavailableLine className="pulse-off--panel" />
 
-
   const submit = (event: FormEvent) => {
     event.preventDefault()
 
     const asked = question.trim()
     if (asked === '' || ask.isPending) return
 
-    const input: PulseQuestion = { scope: active.scope, noteId, notebookId, question: asked }
+    // Only the id the chosen scope is actually answered from. Sending the open
+    // notebook along with an "All my notes" question puts `notebook_id` in the
+    // body, and `NotesAIService::askNotes()` scopes retrieval to it — which
+    // would make the widest option answer exactly as the narrow one beside it
+    // while the hint underneath still promised everything they can read.
+    const input: PulseQuestion = {
+      scope: active.scope,
+      noteId: active.scope === 'note' ? noteId : null,
+      notebookId: active.scope === 'notebook' ? notebookId : null,
+      question: asked,
+    }
 
     setPending(asked)
     setQuestion('')
@@ -170,6 +179,18 @@ export function PulsePanel({
               <div className="pulse-turn__answer">{renderParagraphs(turn.answer.answer)}</div>
 
               <CitationList citations={turn.answer.citations} onNavigate={onNavigate} />
+
+              {/* An answer the server called grounded but cited nothing has to
+                  say so. `CitationList` renders nothing for an empty list —
+                  correctly, an empty "Sources" heading is worse than none — and
+                  silence there would leave the panel's promise that every
+                  answer shows its sources quietly unkept. */}
+              {turn.answer.grounded && turn.answer.citations.length === 0 ? (
+                <p className="pulse-turn__unsourced">
+                  <Icon name="info" size={14} />
+                  Pulse did not name a note for this answer, so there is nothing to check it against.
+                </p>
+              ) : null}
             </li>
           ))}
         </ol>
@@ -246,7 +267,9 @@ export function PulsePanel({
       <LiveStatus>
         {latest
           ? latest.answer.grounded
-            ? `Pulse answered from ${latest.answer.citations.length} of your notes.`
+            ? latest.answer.citations.length === 0
+              ? 'Pulse answered from your notes but named none of them.'
+              : `Pulse answered from ${latest.answer.citations.length} of your notes.`
             : 'Pulse answered from general knowledge, not from your notes.'
           : ''}
       </LiveStatus>

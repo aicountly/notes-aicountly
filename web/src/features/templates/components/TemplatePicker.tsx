@@ -15,7 +15,7 @@
  * left out so the absence is explained rather than mysterious.
  */
 
-import { Fragment, useEffect, useId, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -93,6 +93,22 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
     // mutation on each keystroke instead of once per opening.
   }, [open])
 
+  /**
+   * A close handler whose identity never changes.
+   *
+   * `Dialog` keys its Escape handler, its focus trap and its scroll lock on
+   * `onClose`, so passing the caller's inline arrow straight through would tear
+   * all three down and rebuild them every time the page behind this dialog
+   * re-renders — and each rebuild pulls focus out of the search field and back
+   * to whatever opened the picker, mid-search. Latched through a ref so callers
+   * do not have to memoise anything.
+   */
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+  const close = useCallback(() => onCloseRef.current(), [])
+
   const all = templates.data ?? []
   // A canvas template on a deployment without canvas cannot make a note, so it
   // is not offered. The page is where it is listed, with the reason on it.
@@ -129,7 +145,7 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
       .mutateAsync({ templateId: template.id, notebook_id: notebookId ?? defaultNotebook })
       .then((note) => {
         onCreated?.(note)
-        onClose()
+        close()
         navigate(`/notes/${note.id}`)
       })
       // The failure is on screen as `start.error`; no note was created, so
@@ -157,7 +173,7 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="New note from template"
       width={640}
       footer={

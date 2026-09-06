@@ -500,7 +500,7 @@ final class AttachmentService
 
         $attachment = $this->requireAttachment($noteId, $attachmentId);
 
-        Connection::transaction(function () use ($identity, $attachment, $attachmentId, $noteId): void {
+        Connection::transaction(function () use ($identity, $note, $attachment, $attachmentId, $noteId, $sesKey): void {
             Connection::execute(
                 'UPDATE note_attachments SET deleted_at = now(), updated_at = now()
                  WHERE id = :id AND deleted_at IS NULL',
@@ -515,10 +515,25 @@ final class AttachmentService
             // A linked Drive file belongs to the user, not to this note. Notes
             // deleting it would destroy a file they still have in Drive.
             //
+            // Nor is a Drive-stored *upload*, for the reason
+            // {@see enqueueProcessing()} gives about every other job: Drive is
+            // reached on the caller's own ses_key, a cron worker has none, and
+            // {@see \Aicountly\Api\Integrations\DriveObjectStore} rightly
+            // refuses rather than inventing a caller. Queued anyway, the job
+            // could only refuse, retry five times with backoff and settle as a
+            // permanent failure — on every deletion, for ever, with the health
+            // endpoint reporting it. The bytes outliving the row in Drive is a
+            // known limitation (docs/DRIVE_INTEGRATION.md, "What is not done");
+            // a queue full of red rows saying so is not.
+            //
             // A row that names no object gets no job either: an upload that
             // failed, or one whose object a previous purge already removed, has
             // nothing left to clean up, and a job with no keys can only fail.
-            if ($attachment['drive_file_id'] === null && $keys !== []) {
+            $purgeable = $attachment['drive_file_id'] === null
+                && (string) $attachment['storage_provider'] !== 'drive'
+                && $keys !== [];
+
+            if ($purgeable) {
                 $this->jobs->enqueue($identity, JobQueue::OBJECT_PURGE, null, null, [
                     'storage_provider' => (string) $attachment['storage_provider'],
                     'keys' => $keys,
@@ -526,13 +541,21 @@ final class AttachmentService
                 ]);
             }
 
-            // A file the user linked from their own Drive survives, but the
-            // cross-reference saying this note points at it should not: Drive's
-            // document manager would otherwise keep showing a note that no
-            // longer has the file. Deleting a document Notes uploaded removes
-            // its links in Drive already, so only the linked case needs this.
-            if ($attachment['drive_file_id'] !== null && $sesKey !== '') {
-                $this->unlinkFromDrive($sesKey, $note, (string) $attachment['drive_file_id']);
+            // The document survives either way — a linked file is the user's
+            // own, and an uploaded one outlives this row until the purge job
+            // reaches it — but the cross-reference saying this note points at
+            // it should not: Drive's document manager would otherwise keep
+            // showing a note that no longer has the file.
+            //
+            // Both Drive cases, not just the linked one. The row a purge would
+            // eventually cascade away is precisely the one this API creates at
+            // finalize (§29 step 6), and that purge cannot run for a Drive
+            // object today — it has no session — so leaving the link to it
+            // would leave it forever. Drive addresses a document by the same id
+            // in both cases; `drive_file_id` only says whose file it is.
+            $documentId = (string) ($attachment['drive_file_id'] ?? $attachment['storage_key']);
+            if ((string) $attachment['storage_provider'] === 'drive' && $documentId !== '' && $sesKey !== '') {
+                $this->unlinkFromDrive($sesKey, $note, $documentId);
             }
 
             $this->activity->record($identity, ActivityRecorder::ATTACHMENT_REMOVED, $noteId, null, [

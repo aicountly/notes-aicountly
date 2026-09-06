@@ -24,7 +24,7 @@
  *     "monthly" would change what the reminder does without saying so.
  */
 
-import { useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 
 import { ApiError } from '../../../shared/api/client'
 import { Icon } from '../../../shared/ui/Icon'
@@ -153,6 +153,22 @@ export function ReminderDialog({
     setError(null)
   }, [open, reminder])
 
+  /**
+   * A close handler whose identity never changes.
+   *
+   * `Dialog` keys its Escape handler, its focus trap and its scroll lock on
+   * `onClose`, so handing it the caller's inline arrow would tear all three
+   * down and rebuild them every time the page behind the dialog re-renders —
+   * a background refetch of the reminder list is enough — and each rebuild
+   * throws focus out of the form and back to whatever opened it. Latched
+   * through a ref so the caller still does not have to memoise anything.
+   */
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
+  const close = useCallback(() => onCloseRef.current(), [])
+
   const editing = reminder !== null
   const busy = create.isPending || update.isPending
   const fieldErrors = error instanceof ApiError ? error.fieldErrors : {}
@@ -242,7 +258,7 @@ export function ReminderDialog({
     work
       .then((saved) => {
         onSaved?.(saved, !editing)
-        onClose()
+        close()
       })
       .catch(setError)
   }
@@ -250,13 +266,13 @@ export function ReminderDialog({
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={close}
       title={editing ? 'Edit reminder' : 'Set a reminder'}
       description={noteTitle ? `On “${noteTitle}”.` : undefined}
       width={560}
       footer={
         <>
-          <Button onClick={onClose} disabled={busy}>
+          <Button onClick={close} disabled={busy}>
             Cancel
           </Button>
           <Button

@@ -92,7 +92,10 @@ export interface ApiStubOptions {
 export async function stubApi(page: Page, options: ApiStubOptions = {}): Promise<void> {
   const notes = options.notes ?? []
 
-  await page.route('**/api/**', async (route: Route) => {
+  // Anchored to the API base, NOT a `**/api/**` glob. That glob also matches the
+  // app's own source modules — `/src/shared/api/client.ts` contains `/api/` —
+  // so the dev server's JavaScript came back as JSON and the app never booted.
+  await page.route(/\/api\/(?!.*\.[cm]?[jt]sx?(\?|$))/, async (route: Route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^.*\/api/, '')
     const method = route.request().method()
@@ -167,6 +170,61 @@ export async function stubApi(page: Page, options: ApiStubOptions = {}): Promise
 
     return json(ok(null))
   })
+}
+
+/**
+ * Bring the navigation on screen, whatever the viewport.
+ *
+ * Below 860px the sidebar is an off-canvas drawer and a closed drawer is
+ * `visibility: hidden` — deliberately, so its links are out of the tab order
+ * and out of the accessibility tree. That last part is why this helper is
+ * needed even for a read-only assertion: a role query walks the accessibility
+ * tree, so a link inside a closed drawer is not merely unclickable, it does not
+ * resolve at all.
+ */
+export async function openNav(page: Page): Promise<void> {
+  // The shell has to be on screen before "is the toggle showing?" is a real
+  // question. Asked of a page that has not rendered yet the answer is always
+  // no, the drawer is left closed, and the caller then waits out its timeout
+  // for a link that a closed drawer keeps out of the accessibility tree.
+  await page.getByRole('button', { name: /search anything/i }).waitFor()
+
+  // Matches both states, because the button renames itself to "Hide
+  // navigation" once the drawer is open.
+  const toggle = page.getByRole('button', { name: /(show|hide) navigation/i })
+  if (!(await toggle.isVisible())) {
+    // Wide enough for the sidebar to be part of the layout: nothing to open.
+    return
+  }
+
+  // Retried rather than clicked once: navigating closes the drawer, and a call
+  // that arrives while that is still in flight would otherwise open it and
+  // watch it shut again.
+  const nav = page.getByRole('navigation', { name: /notes navigation/i })
+  await expect(async () => {
+    if (!(await nav.isVisible())) {
+      await toggle.click()
+    }
+    await expect(nav).toBeVisible({ timeout: 1_000 })
+  }).toPass({ timeout: 10_000 })
+}
+
+/**
+ * Click a navigation link at whatever viewport the test is running, so one spec
+ * exercises both layouts — which is the point of running the suite in two
+ * projects.
+ */
+export async function goToSection(page: Page, name: string): Promise<void> {
+  await openNav(page)
+
+  // Substring matching, deliberately: a nav item carries its count inside the
+  // link, so `My Notes` has the accessible name "My Notes 1" the moment the
+  // library is not empty. Matching exactly would make the helper work only for
+  // empty accounts.
+  await page
+    .getByRole('navigation', { name: /notes navigation/i })
+    .getByRole('link', { name })
+    .click()
 }
 
 export const test = base.extend<{ signIn: (options?: ApiStubOptions) => Promise<void> }>({

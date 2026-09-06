@@ -8,22 +8,31 @@
  *   - An image is shown. A PDF is shown *on request*, because loading a 30-page
  *     document into every row of a list is not a preview, it is a download with
  *     extra steps.
- *   - Everything else is a link. Nothing arbitrary is ever rendered inline:
- *     the server refuses HTML and SVG uploads outright, and this keeps an
- *     allowlist of its own so a future server relaxation cannot quietly turn
- *     this component into one that runs someone else's markup.
+ *   - Nothing arbitrary is ever rendered inline: the server refuses HTML and
+ *     SVG uploads outright, and this keeps an allowlist of its own so a future
+ *     server relaxation cannot quietly turn this component into one that runs
+ *     someone else's markup. Everything outside that allowlist is offered as a
+ *     download and nothing else.
  *   - Processing state is named after the job that is running, and when the
  *     deployment cannot run that job at all the row says so instead of showing
  *     a spinner that will never resolve.
+ *
+ * Every path to the bytes goes through `useAttachments`, never through a raw
+ * `content_url`: that endpoint wants the session's Bearer token, which a
+ * browser does not attach to an `<img>`, an `<object>` or a link. See
+ * `fetchBytes` there for the whole reason this component holds object URLs
+ * rather than hrefs.
  */
 
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 
+import { ApiError } from '../../../shared/api/client'
 import { Icon } from '../../../shared/ui/Icon'
 import type { IconName } from '../../../shared/ui/Icon'
-import { Button, Spinner } from '../../../shared/ui/primitives'
+import { Button, Skeleton, Spinner } from '../../../shared/ui/primitives'
 import type { Attachment, AttachmentKind } from '../../../shared/api/types'
-import { attachmentContentUrl, formatBytes } from '../hooks/useAttachments'
+import { downloadAttachment, formatBytes, useAttachmentObjectUrl } from '../hooks/useAttachments'
 import type { PendingUpload } from '../hooks/useAttachments'
 import '../attachments.css'
 
@@ -147,6 +156,38 @@ export function describeStatus(
   }
 }
 
+/**
+ * True once this row has come near the viewport, and true forever after.
+ *
+ * The bytes are fetched by this app rather than by the browser, so `loading`
+ * on an `<img>` no longer defers anything — without a gate, opening a note with
+ * twenty photographs would download twenty photographs. Where there is no
+ * IntersectionObserver the answer is simply "yes", which is what an eagerly
+ * loaded `<img>` would have done anyway.
+ */
+function useHasBeenVisible(ref: RefObject<HTMLElement | null>): boolean {
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined')
+
+  useEffect(() => {
+    if (seen) return undefined
+    const element = ref.current
+    if (!element) return undefined
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setSeen(true)
+      },
+      // Start a little before the row arrives, so the picture is there by the
+      // time it is scrolled to rather than a beat afterwards.
+      { rootMargin: '250px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref, seen])
+
+  return seen
+}
+
 export interface AttachmentBlockProps {
   attachment: Attachment
   features: { transcription: boolean; ocr: boolean }
@@ -167,12 +208,33 @@ export function AttachmentBlock({
   onCheckAgain,
 }: AttachmentBlockProps) {
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
   const previewId = useId()
+  const rowRef = useRef<HTMLLIElement>(null)
+  const visible = useHasBeenVisible(rowRef)
 
-  const href = attachmentContentUrl(attachment)
   const status = describeStatus(attachment, features)
   const showImage = canShowImage(attachment)
   const showPdf = canShowPdf(attachment)
+
+  const image = useAttachmentObjectUrl(attachment, showImage && visible)
+  // Only once the user asks: a PDF is fetched in full to be shown.
+  const pdf = useAttachmentObjectUrl(attachment, showPdf && previewOpen)
+
+  const download = async () => {
+    setDownloading(true)
+    setDownloadError(null)
+    try {
+      await downloadAttachment(attachment)
+    } catch (error) {
+      setDownloadError(
+        error instanceof ApiError ? error.message : `${attachment.filename} could not be downloaded.`,
+      )
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   const meta = [
     KIND_LABELS[attachment.kind],
@@ -181,16 +243,17 @@ export function AttachmentBlock({
   ].filter((part): part is string => part !== null)
 
   return (
-    <li className="att-block">
+    <li className="att-block" ref={rowRef}>
       <div className="att-block__row">
         <span className="att-block__icon" aria-hidden>
           <Icon name={KIND_ICONS[attachment.kind]} size={17} />
         </span>
 
         <div className="att-block__body">
-          <a className="att-block__name" href={href} download={attachment.filename}>
-            {attachment.filename}
-          </a>
+          {/* Plain text, not a link: the only address for these bytes needs a
+              header the browser will not send, so the Download control below
+              is the one thing that can actually reach them. */}
+          <p className="att-block__name">{attachment.filename}</p>
           <p className="att-block__meta">
             {meta.join(' · ')}
             {attachment.drive_file_id ? ' · From Drive' : ''}
@@ -210,6 +273,13 @@ export function AttachmentBlock({
               ) : null}
             </p>
           ) : null}
+
+          {downloadError ? (
+            <p className="att-status att-status--failed" role="alert">
+              <Icon name="alert" size={13} />
+              <span>{downloadError}</span>
+            </p>
+          ) : null}
         </div>
 
         <div className="att-block__actions">
@@ -219,21 +289,25 @@ export function AttachmentBlock({
               variant="ghost"
               icon={previewOpen ? 'chevron-down' : 'chevron-right'}
               aria-expanded={previewOpen}
-              aria-controls={previewId}
+              // Only while the panel exists: pointing at an absent id is a
+              // promise the accessibility tree cannot keep.
+              aria-controls={previewOpen ? previewId : undefined}
               onClick={() => setPreviewOpen((open) => !open)}
             >
               Preview
             </Button>
           ) : null}
 
-          <a
-            className="btn btn--ghost btn--sm att-block__download"
-            href={href}
-            download={attachment.filename}
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="download"
+            loading={downloading}
+            aria-label={`Download ${attachment.filename}`}
+            onClick={() => void download()}
           >
-            <Icon name="download" size={15} />
-            <span>Download</span>
-          </a>
+            Download
+          </Button>
 
           {canDelete && onDelete ? (
             <Button
@@ -251,33 +325,48 @@ export function AttachmentBlock({
 
       {showImage ? (
         <div className="att-preview att-preview--image">
-          {/* Not wrapped in a link: Download above already goes to the same
-              place, and a second link with the same name is noise in a screen
-              reader's list of links. */}
-          <img
-            src={href}
-            alt={attachment.filename}
-            loading="lazy"
-            decoding="async"
-            width={attachment.width ?? undefined}
-            height={attachment.height ?? undefined}
-          />
+          {image.url ? (
+            <img
+              src={image.url}
+              alt={attachment.filename}
+              decoding="async"
+              width={attachment.width ?? undefined}
+              height={attachment.height ?? undefined}
+            />
+          ) : image.error ? (
+            // Rendering nothing here would leave a blank strip under the row
+            // with no clue that anything was meant to be in it.
+            <p className="att-preview__fallback" role="status">
+              {image.error.message}
+            </p>
+          ) : (
+            <div className="att-preview__loading">
+              <Skeleton width="100%" height={160} radius={0} />
+            </div>
+          )}
         </div>
       ) : null}
 
       {showPdf && previewOpen ? (
         <div className="att-preview att-preview--pdf" id={previewId}>
-          <object data={href} type="application/pdf" aria-label={`Preview of ${attachment.filename}`}>
-            {/* Reached whenever the browser declines to embed a PDF — a mobile
-                browser, or a store that sends the file as a download. */}
-            <p className="att-preview__fallback">
-              This browser cannot show the PDF here.{' '}
-              <a href={href} download={attachment.filename}>
-                Download {attachment.filename}
-              </a>{' '}
-              to read it.
+          {pdf.url ? (
+            <object data={pdf.url} type="application/pdf" aria-label={`Preview of ${attachment.filename}`}>
+              {/* Reached whenever the browser declines to embed a PDF — a
+                  mobile browser, or one with its PDF viewer switched off. */}
+              <p className="att-preview__fallback">
+                This browser cannot show the PDF here. Use Download above to read{' '}
+                {attachment.filename}.
+              </p>
+            </object>
+          ) : pdf.error ? (
+            <p className="att-preview__fallback" role="status">
+              {pdf.error.message}
             </p>
-          </object>
+          ) : (
+            <p className="att-preview__fallback">
+              <Spinner size={13} /> <span>Loading {attachment.filename}…</span>
+            </p>
+          )}
         </div>
       ) : null}
     </li>
@@ -317,7 +406,7 @@ export function PendingAttachmentBlock({ item, onRetry, onDismiss }: PendingAtta
         </span>
 
         <div className="att-block__body">
-          <p className="att-block__name att-block__name--plain">{item.filename}</p>
+          <p className="att-block__name">{item.filename}</p>
           <p className="att-block__meta">{formatBytes(item.byteSize)}</p>
 
           {failed ? (
@@ -343,7 +432,10 @@ export function PendingAttachmentBlock({ item, onRetry, onDismiss }: PendingAtta
         </div>
 
         <div className="att-block__actions">
-          {failed ? (
+          {/* Only where sending it again could end differently. A file this app
+              refused on sight — empty, over the limit, a blocked extension —
+              would fail identically every time, so no button is offered. */}
+          {failed && item.retryable ? (
             <Button size="sm" variant="ghost" icon="refresh" onClick={() => onRetry(item.key)}>
               Try again
             </Button>

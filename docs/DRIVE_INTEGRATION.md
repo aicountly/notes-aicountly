@@ -55,18 +55,44 @@ redesign. Notes' record in that form:
 | `product_code` | `notes` — lowercase, stable, chosen once, **never renamed** |
 | scope | `personal` **and** `company` — a note's `tenant_id` is nullable, so both are real |
 | entity | `entity_type = note`, `entity_id` = the note's UUID |
-| modules | `attachments`, `voice-notes`, `scans`, `meeting-recordings`, `thumbnails` |
+| modules | `attachments`, `voice-notes`, `scans`, `meeting-recordings`, `thumbnails` — the two audio/video ones cannot be used yet, see below |
 | integration | **Proxy** (§9) — Notes' backend runs Drive's upload-session sequence on the user's behalf, exactly as Books and HRMS do. The browser never talks to Drive. |
-| links | `POST /api/document-links` — **not called**, see [What is not done](#what-is-not-done) |
+| links | `POST /api/document-links` after finalize, `DELETE /api/document-links/{id}` when a Drive attachment is detached — both best-effort, see [Cross-references](#cross-references) |
 | retention | none requested; Notes falls into Drive's `standard` class |
 
-**No change is required in Drive.** `notes` is not one of the nine
-`product_code` values with a branch in `ObjectKeyBuilder`, and it does not need
-one: a note is a business record with a UUID, which is exactly what
+**The key shape needs no change in Drive.** `notes` is not one of the eight
+`product_code` values with a branch in `ObjectKeyBuilder` (`books`, `hrms`,
+`auditor`, `fr`, `secretarial`, `chat`, `contacts`, `vault`), and it does not
+need one: a note is a business record with a UUID, which is exactly what
 `entity_type` + `entity_id` express, so Notes lands on the **generic key shape**.
 `product_code` is an unvalidated `VARCHAR(64)` on the request and an unrecognised
 value falls through to the generic builder — that permissiveness is the property
-§29 exists to protect, and it is why onboarding Notes touches no Drive code.
+§29 exists to protect.
+
+**Drive's MIME allowlist does need one, and this is the one place onboarding
+Notes is not pure configuration.** §29 says so itself: its table of what requires
+a Drive change lists *"new media types → the MIME allowlist"*.
+`POST /api/upload-sessions` checks the declared `content_type` through
+`DocumentService::assertAllowedContentType()` before it writes a session row,
+against `ALLOWED_MIME_PREFIXES`:
+
+```
+application/pdf   application/msword   application/vnd.
+application/vnd.openxmlformats-officedocument                image/
+text/plain        text/csv             application/zip
+application/x-zip-compressed           application/octet-stream
+```
+
+There is no `audio/` and no `video/`. Notes accepts both — `AttachmentService::KINDS`
+lists ten audio types and five video types — so a voice note, a meeting
+recording, a `text/markdown` file and an `application/rtf` document are refused
+at **step 1** with `UPLOAD_SESSION_FAILED` (HTTP 400), before a byte moves and
+before any of the sequence below runs. Images (every type Notes takes starts
+`image/`), PDFs, Office and OpenDocument files, plain text, CSV and zips go
+through. Until Drive's allowlist gains `audio/` and `video/`, the `voice-notes`
+and `meeting-recordings` modules are reserved rather than usable, and a
+deployment with Drive on cannot store a recording at all. See
+[What is not done](#what-is-not-done).
 
 The keys Drive will write (`ObjectKeyBuilder::buildFinalKeyForSession`):
 
@@ -149,12 +175,23 @@ so a wrong value can never be corrected without copying every object. They are
 constants in `Integrations\DriveContext` with that warning on them. Add a module;
 never rename one.
 
-`sha256` is optional to Drive and sent anyway. Drive compares it against the
-digest it computes from the object it actually stored and rejects a mismatch, so
-a truncated PUT that returned 200 is caught at upload rather than discovered by
-whoever opens the file next year. The **stored** checksum is always Drive's own —
-a hash the uploader chose proves nothing about the bytes Drive holds. Drive also
-replaces the declared `size_bytes` with the count it streamed.
+`sha256` is optional to Drive and sent anyway. Drive streams the promoted object
+once, computes its own digest, compares the declared one against it and rejects a
+mismatch — so a truncated PUT that returned 200 is caught at upload rather than
+discovered by whoever opens the file next year. The **stored** checksum is always
+Drive's own; a hash the uploader chose proves nothing about the bytes Drive
+holds. That same pass replaces the declared `size_bytes` with the count it read.
+
+One thing to check on Drive's side before turning this on, because sending the
+hash unconditionally has a cost. Drive's hashing pass is itself switchable
+(`CHECKSUM_ON_FINALIZE`, default on). With it **off** Drive has nothing to
+compare against, and `ObjectChecksumService::verifyDeclared()` treats a declared
+hash it cannot check as an error rather than ignoring it — *"checksum
+verification was requested but the object could not be hashed"*. Finalize then
+throws, the session is marked `failed` and the object is left in quarantine. A
+Drive deployment with `CHECKSUM_ON_FINALIZE=0` would therefore reject **every**
+Notes upload, not just a corrupted one, and nothing on this side can tell that
+apart from any other finalize failure.
 
 The note's UUID is permanent from the moment it is created, so unlike Books —
 which uploads against `draft-{id}` and rebinds later — Notes never needs
@@ -212,8 +249,12 @@ where new files go and nothing else.**
 
 ## Company context, and personal notes
 
-Drive requires `cmp_id`, `fy_id` and `bo_id` on **every** call (query parameter
-or `X-AIC-*` header) and answers `MISSING_COMPANY_CONTEXT` without them.
+Drive requires `cmp_id`, `fy_id` and `bo_id` on **every** call.
+`SesAuthController::authProduct()` reads each from the query string, then an
+`X-AIC-CMP-ID` / `X-AIC-FY-ID` / `X-AIC-BO-ID` header, then the JSON body, and
+names the one that is missing: `MISSING_COMPANY_CONTEXT`,
+`MISSING_FINANCIAL_YEAR` or `MISSING_BRANCH_CONTEXT`, all HTTP 400. Notes sends
+them as query parameters.
 
 - A **company note** uses `scope=company` and the caller's real company context.
   Notes cannot supply it from its own `tenant_id`, which is the portal's company
@@ -248,9 +289,56 @@ file **linked from Drive** is the user's own: detaching it removes the attachmen
 row and nothing else, because deleting it would destroy a file they still have in
 Drive.
 
-The field mapping is confirmed against Drive's
-`DocumentService::formatDocumentRow()`: `id`, `filename`, `mime_type`,
-`size_bytes`, `checksum_sha256`.
+**The name and the type come from the version, not from the document**, and this
+is the one field mapping worth spelling out because reading the obvious place
+does not work. `DocumentService::formatDocumentRow()` does expose `filename`,
+`mime_type` and `checksum_sha256` — but it reads them from `current_filename`,
+`current_mime` and `current_checksum`, which are aliases produced by the
+`LEFT JOIN document_versions` in the **list** query. The single-document route
+does no such join: `getDocumentDetails()` fetches through
+`PermissionService::getDocumentForCtx()`, which is `SELECT * FROM documents`, and
+the `documents` table has no filename or mime column at all. So
+`GET /api/documents/{id}` answers `filename: null` and `mime_type: null` for
+every document, always.
+
+What that route does carry is `versions[]` — the `document_versions` rows in
+full — so `DriveAttachmentService::file()` reads the entry flagged
+`is_current = 1` and takes `filename`, `mime_type`, `size_bytes` and
+`checksum_sha256` from there, falling back to the document's own `title` and
+`size_bytes` (both real columns, set at finalize). `DriveUploadTest` pins that
+shape.
+
+## Cross-references
+
+Step 6 of Drive's §29 asks a product to register the reverse index — the row
+that lets Drive answer "what is this file attached to?" from its own side,
+rather than every product having to be asked. `document_links` is Drive's
+anti-duplication mechanism, and Notes writes to it:
+
+- **After finalize**, `DriveDocumentService::link()` posts
+  `{doc_id, product_code: notes, external_record_type: note, external_record_id: <note uuid>}`
+  to `POST /api/document-links`. It runs only once the bytes are safely stored,
+  and it is **best-effort**: the file exists by then, and failing an upload the
+  user completed over a missing cross-reference would be the wrong trade.
+  Drive's insert is `ON CONFLICT … DO NOTHING`, so a later retry converges.
+- **On detach**, the row is dropped again — `GET /api/document-links` filtered
+  by `product_code` and `external_record_id`, then
+  `DELETE /api/document-links/{id}` for the one naming this document. Also
+  best-effort, and also skipped entirely when Drive is off. A stale link row is
+  untidy; refusing a detach the user asked for because Drive is unreachable
+  would not be.
+
+Detaching never deletes the document. For a linked file that is the whole point.
+For an uploaded one the bytes stay in Drive as well: no purge job is queued for a
+Drive-stored attachment, see [What is not done](#what-is-not-done). So dropping
+the cross-reference is the *only* thing that stops Drive's document manager from
+going on advertising a note that no longer has the file.
+
+One asymmetry to know about: `link-drive` attaches an existing document **without**
+registering a `document_links` row for it, while an upload registers one. The
+detach path covers both, so the vacuous case is a lookup that matches nothing.
+Registering the link for a file the user linked would be the more complete §29
+answer and is not built.
 
 ## The local fallback
 
@@ -347,6 +435,16 @@ the file.
 Stated plainly, because an integration that is *ready for* something is not the
 same as having it.
 
+- **Audio and video cannot be stored in Drive at all.** Drive's session-create
+  allowlist has no `audio/` or `video/` prefix, so every type behind the
+  `voice-notes` and `meeting-recordings` modules — and `text/markdown` and
+  `application/rtf` besides — is refused at step 1 (see
+  [Notes' onboarding record](#notes-onboarding-record)). A deployment that turns
+  Drive on loses the ability to attach a recording, which is a bigger change than
+  "where new files go" and the reason to read that section before flipping the
+  flag. Closing it is a one-line change to `ALLOWED_MIME_PREFIXES` in
+  `drive-react-app`, which §29 explicitly anticipates — not something Notes can
+  do, and not something to work around here by lying about a file's type.
 - **Drive still lists Notes as Future.** §10 of the architecture document records
   `Notes | notes.aicountly.com | notes | Generic | Future`, and Drive's
   cross-repository `STORAGE_REFERENCE.md` has **no Notes row at all** — neither
@@ -361,28 +459,44 @@ same as having it.
   §10's status column, and a `STORAGE_REFERENCE.md` §4/§8 entry. Notes cannot
   make it and should not try; Drive's documents say their statuses go stale and
   must be re-verified against the product's own repo.
-- **`POST /api/document-links` is never called.** Step 6 of §29 asks a product to
-  register the reverse index from the Drive document to the business record, so
-  Drive can answer "what is this file attached to?" from its own side. Notes
-  holds the forward link in `note_attachments` and writes no `document_links`
-  row. The endpoint takes `{doc_id, product_code, external_record_type,
-  external_record_id}`.
+- **A file attached with `link-drive` gets no `document_links` row.** An upload
+  registers one at finalize and drops it on detach (see
+  [Cross-references](#cross-references)), but a document the user already had in
+  Drive is attached without telling Drive that the note now references it. The
+  detach path already handles the row if one ever exists, so closing this is one
+  call in `AttachmentService::linkDrive()` — it is simply not built.
 - **Nothing is derived from a Drive-stored attachment**, for the reason in
   *Processing*. Closing it needs a decision that has not been made: either Drive
   gains a way for a product's backend to read an object it owns without an
   end-user session, or Notes derives what it needs from the bytes it already
   holds in memory during the upload request.
-- **Purging a Drive object does not work.** `attachment.object_purge` is still
-  queued for a Drive-stored upload, and it runs in the worker through
-  `AttachmentService::storeFor($attachment)` — with no session behind it, so
-  `DriveObjectStore` refuses rather than inventing a caller. The bytes stay in
-  Drive until someone removes the document there. Same root cause as the point
-  above, and the same decision closes both.
-- **Drive's delete answers 403, not 404.** `DELETE /api/documents/{id}` returns
-  `DELETE_FAILED` with HTTP 403 for every failure, including a document that is
-  not visible to the caller, while `DriveDocumentService::delete()` treats 404 as
-  "already gone" and anything else as retryable. A document already removed in
-  Drive would therefore be retried rather than accepted.
+- **Nothing purges a Drive object.** Detaching an attachment soft-deletes the row
+  and, for a **local** file, queues `attachment.object_purge` to remove the bytes.
+  A Drive-stored one is deliberately excluded — `AttachmentService::delete()`
+  queues the job only when `drive_file_id` is null *and* `storage_provider` is
+  not `drive` — because the job runs in the worker through
+  `storeFor($attachment)`, which has no session behind it, and `DriveObjectStore`
+  rightly refuses rather than inventing a caller. Queued anyway it could only
+  fail, retry with backoff and settle as a permanent failure, on every deletion,
+  for ever. So the row goes and the document stays until someone removes it in
+  Drive. Same root cause as the point above, and the same decision closes both.
+  What *is* dropped is the `document_links` row, so at least nothing in Drive
+  goes on claiming the note still has the file.
+- **Drive's delete cannot say *why* it refused.** `DELETE /api/documents/{id}`
+  answers `DELETE_FAILED` with HTTP 403 for every failure alike — a document
+  that is not visible to the caller, one on legal hold, one still inside its
+  retention window, and one that is simply already gone. `AicountlyClient` maps
+  403 and 404 both to `NOT_FOUND` on purpose (that product decides, and "not
+  yours" and "not there" are one answer), so `DriveDocumentService::delete()`
+  cannot tell a refusal from an absence: it answers `false` — "there was nothing
+  to remove" — for all four. The failure mode is therefore the opposite of a
+  stuck retry: a delete Drive **refused** is indistinguishable from one there was
+  nothing to do. The only path that reaches it today is the rollback in
+  `AttachmentService::upload()`, when the bytes landed but the row would not
+  insert, and there the `false` is swallowed and the orphan document stays.
+  Nothing is lost — Drive still holds it — but Notes stops tracking it.
+  Distinguishing the cases needs a discriminated error from Drive, which is a
+  change in `drive-react-app`.
 - **Versions.** Drive supports document versions; every Notes upload creates a
   new document at version 1. Replacing an attachment in place — a second version
   of the same Drive document — is not built.
@@ -395,16 +509,27 @@ same as having it.
 
 ## Turning it on
 
-1. Set `NOTES_DRIVE_ENABLED=true` in `api/.env`. Nothing else is needed — the
-   origin is derived from this deployment's hostname.
-2. `GET /api/config` should now report `drive: true`, and the attachment UI will
-   offer "Choose from Drive".
+1. Set `NOTES_DRIVE_ENABLED=true` in `api/.env`. That is the only setting *this*
+   repository needs — the origin is derived from this deployment's hostname —
+   but see steps 4 and 5 for what to check on Drive's side and what to expect.
+2. `GET /api/config` should now report `drive: true`, and new uploads will go to
+   Drive instead of the local disk. One control appears with it: `AttachmentList`
+   renders an **Attach from Drive** button behind `useFeature('drive')`, opening a
+   dialog that takes a document id — or a Drive URL, from which `parseDriveFileId`
+   lifts the id — and calls `link-drive` through `useAttachments.attachDriveFile`.
+   It is not a file *picker*: nothing browses Drive from inside Notes, so the user
+   has to get the id from Drive themselves.
 3. For **company** notes, the client must send `cmp_id`, `fy_id` and `bo_id` as
    query parameters; personal notes need nothing, because they carry Drive's
    `cmp_id=fy_id=bo_id=0` sentinel. See
    [Company context](#company-context-and-personal-notes).
-4. Expect no thumbnails, OCR or transcripts on new attachments, and expect the
-   bytes of a deleted attachment to stay in Drive. See
+4. Confirm `CHECKSUM_ON_FINALIZE` is **not** switched off on the Drive being
+   pointed at, or every upload will fail at finalize. See
+   [What Notes tells Drive about a file](#what-notes-tells-drive-about-a-file).
+5. Expect no thumbnails, OCR or transcripts on new attachments; expect the bytes
+   of a deleted attachment to stay in Drive; and expect audio and video uploads
+   to be **refused outright** by Drive's MIME allowlist, which is a capability
+   the deployment loses rather than merely relocates. See
    [What is not done](#what-is-not-done).
 
 Existing local attachments keep working, and keep being served from disk.

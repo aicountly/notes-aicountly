@@ -353,7 +353,10 @@ final class AicountlyClient
             'Accept: application/json',
             // The caller's session, forwarded unchanged. See the class note.
             'Authorization: Bearer ' . $sesKey,
-            // Lets the other product attribute the call in its own audit log.
+            // Says who is calling, for whoever is reading an access log at 3am.
+            // No sibling in the suite reads it today — neither drive-react-app
+            // nor pulse-aicountly names it anywhere — so nothing depends on it
+            // and nothing should be built on the assumption that it arrives.
             'X-Aicountly-Client: notes',
         ];
         if ($payload !== null) {

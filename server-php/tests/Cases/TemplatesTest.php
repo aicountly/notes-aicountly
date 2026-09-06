@@ -394,6 +394,51 @@ final class TemplatesTest extends TestCase
         $this->assertSame(404, $this->alice->post('/templates', ['from_note_id' => Uuid::v4()])['status']);
     }
 
+    /**
+     * A company template publishes a document to everyone at the company, so
+     * building one out of somebody else's note is a re-share of that note —
+     * and re-sharing is the owner's decision, not a reader's.
+     */
+    public function testACompanyTemplateCannotRepublishSomebodyElsesNote(): void
+    {
+        $note = $this->alice->post('/notes', [
+            'title' => 'Partner drawings',
+            'document' => Support::doc('Alice 60, Bob 40'),
+        ])['body']['data'];
+
+        // Bob gets the strongest role short of ownership. Even that is not
+        // enough: an editor may rewrite the note, not widen its audience.
+        $this->alice->post('/notes/' . $note['id'] . '/members', ['user_id' => 'user-b', 'role' => 'editor']);
+
+        $refused = $this->bob->post('/templates', [
+            'from_note_id' => $note['id'],
+            'scope' => 'tenant',
+            'name' => 'Acme drawings',
+        ]);
+        $this->assertSame(403, $refused['status']);
+        $this->assertSame('NOTE_ACCESS_DENIED', $refused['body']['error']['code']);
+
+        // A colleague with no grant on the note sees nothing appear.
+        $dave = new ApiClient(Support::user('d', 'acme'));
+        $this->assertCount(0, $this->list($dave), 'nothing was published to the company');
+
+        // Bob may still keep a private copy: that is only what he could do by
+        // selecting the note and pasting it.
+        $own = $this->bob->post('/templates', ['from_note_id' => $note['id'], 'name' => 'My copy']);
+        $this->assertSame(201, $own['status']);
+        $this->assertSame('user', $own['body']['data']['scope']);
+        $this->assertCount(0, $this->list($dave), 'a personal copy stays personal');
+
+        // And the owner may publish her own note, which is the point of scope.
+        $published = $this->alice->post('/templates', [
+            'from_note_id' => $note['id'],
+            'scope' => 'tenant',
+            'name' => 'Acme drawings',
+        ]);
+        $this->assertSame(201, $published['status']);
+        $this->assertSame(['Acme drawings'], $this->names($dave));
+    }
+
     // -- Starting a note from a template ------------------------------------
 
     public function testCreatesANoteFromATemplate(): void

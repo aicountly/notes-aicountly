@@ -18,7 +18,7 @@ import { Link } from 'react-router-dom'
 import { Icon } from '../../../shared/ui/Icon'
 import type { IconName } from '../../../shared/ui/Icon'
 import { useFeature } from '../../../app/AppConfigProvider'
-import { describeFeature } from '../features'
+import { describeFeature, useDeploymentAnswer } from '../features'
 import '../settings.css'
 
 /**
@@ -78,6 +78,11 @@ const DIALOG_SHORTCUTS: Shortcut[] = [
 
 export default function HelpPage() {
   const pulseEnabled = useFeature('ai')
+  // `useFeature` answers false while /config is in flight and again when it
+  // fails, so on its own it would have this page state, as a fact, that Pulse
+  // is switched off here — before anyone has asked, or because the reader is
+  // offline. This page does not get to guess.
+  const deployment = useDeploymentAnswer()
 
   const mac = isMac()
   const globals = globalShortcuts(mac ? '⌘' : 'Ctrl', mac ? '⇧' : 'Shift')
@@ -225,18 +230,29 @@ export default function HelpPage() {
                 missing or simply switched off, rather than assuming they have
                 not found the button yet. */}
             <Explainer icon="pulse" title="Pulse">
-              <p>{describeFeature('ai', pulseEnabled)}</p>
-              {pulseEnabled ? (
-                <p>
-                  Ask a question of one note, one notebook, or everything you can read. Every answer lists the
-                  notes it was drawn from; when Pulse answers without finding anything of yours, it says so above
-                  the answer instead of presenting it as sourced.
+              {deployment.pending ? (
+                <p className="set-hint">Checking whether this deployment has Pulse switched on.</p>
+              ) : deployment.error ? (
+                <p className="set-hint">
+                  This app could not reach the server to find out whether Pulse is switched on here. The{' '}
+                  <Link to="/settings">Settings</Link> page asks again.
                 </p>
               ) : (
-                <p className="set-hint">
-                  There is nothing to switch on here — it is a server setting. The full list of what this
-                  deployment has enabled is on the <Link to="/settings">Settings</Link> page.
-                </p>
+                <>
+                  <p>{describeFeature('ai', pulseEnabled)}</p>
+                  {pulseEnabled ? (
+                    <p>
+                      Ask a question of one note, one notebook, or everything you can read. Every answer lists
+                      the notes it was drawn from; when Pulse answers without finding anything of yours, it says
+                      so above the answer instead of presenting it as sourced.
+                    </p>
+                  ) : (
+                    <p className="set-hint">
+                      There is nothing to switch on here — it is a server setting. The full list of what this
+                      deployment has enabled is on the <Link to="/settings">Settings</Link> page.
+                    </p>
+                  )}
+                </>
               )}
             </Explainer>
           </div>

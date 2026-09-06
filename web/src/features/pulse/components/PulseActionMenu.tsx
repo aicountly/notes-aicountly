@@ -22,7 +22,7 @@
  * silently dropping two of three buttons reads as a bug.
  */
 
-import { Fragment, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import { Icon } from '../../../shared/ui/Icon'
@@ -39,7 +39,7 @@ import {
   usePulseActions,
   usePulseNoteAction,
 } from '../hooks/usePulse'
-import type { PulseActionResult } from '../hooks/usePulse'
+import type { PulseActionResult, PulseChecklistItem, PulseTableData } from '../hooks/usePulse'
 import type { NoteCapabilities, PulseActionDefinition } from '../../../shared/api/types'
 import '../pulse.css'
 
@@ -65,7 +65,9 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
   const [picked, setPicked] = useState<PulseActionDefinition | null>(null)
   const [language, setLanguage] = useState('')
   const [result, setResult] = useState<PulseActionResult | null>(null)
-  const [copied, setCopied] = useState(false)
+  // Three states, not a boolean: a copy that failed has to say so, and `false`
+  // cannot tell "not copied yet" from "the clipboard refused".
+  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
 
   const catalogue = usePulseActions(enabled && open)
   const action = usePulseNoteAction()
@@ -73,6 +75,7 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
 
   const menuId = useId()
   const languageId = useId()
+  const blockedId = useId()
   const containerRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const popupRef = useRef<HTMLDivElement>(null)
@@ -92,6 +95,25 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
   useEffect(() => {
     if (open) popupRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
   }, [open, catalogue.data])
+
+  /**
+   * Closing the preview, and stopping whatever it was waiting for.
+   *
+   * Memoised, and deliberately so: `Dialog` keys its Escape handler, its focus
+   * trap and its scroll lock on `onClose`, so a fresh function each render
+   * tears all three down and rebuilds them — which throws focus out of the
+   * dialog and back to the trigger. This component re-renders once a second
+   * while an action runs (the elapsed clock) and on every keystroke in the
+   * language field, so an unmemoised handler would make the dialog unusable
+   * from a keyboard. `cancel` and `reset` are stable identities.
+   */
+  const dismiss = useCallback(() => {
+    action.cancel()
+    action.reset()
+    setPicked(null)
+    setResult(null)
+    setCopy('idle')
+  }, [action.cancel, action.reset])
 
   if (!enabled) return null
 
@@ -119,7 +141,7 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
 
   const run = (definition: PulseActionDefinition, target?: string) => {
     setResult(null)
-    setCopied(false)
+    setCopy('idle')
     action.reset()
 
     action
@@ -141,14 +163,6 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
     // it opens the dialog on a question rather than on a request that would
     // come back 422.
     if (definition.id !== ACTION_NEEDS_LANGUAGE) run(definition)
-  }
-
-  const dismiss = () => {
-    action.cancel()
-    action.reset()
-    setPicked(null)
-    setResult(null)
-    setCopied(false)
   }
 
   const apply = (write: (text: string) => void, text: string) => {
@@ -173,6 +187,7 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
   const awaitingLanguage = picked?.id === ACTION_NEEDS_LANGUAGE && result === null && !action.isPending
   const items = result ? checklistItems(result) : []
   const table = result ? tableData(result) : null
+  const applied = result ? previewText(result, items, table) : ''
 
   return (
     <div className="pulse-menu" ref={containerRef}>
@@ -201,7 +216,10 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
           onKeyDown={onKeyDown}
         >
           {catalogue.isPending ? (
-            <div className="pulse-menu__loading" aria-busy>
+            <div className="pulse-menu__loading" role="status">
+              {/* `aria-busy` on a plain div announces nothing, and every
+                  Skeleton is aria-hidden — without this the menu opens silent. */}
+              <span className="sr-only">Loading Pulse actions…</span>
               <Skeleton width="70%" height={13} />
               <Skeleton width="55%" height={13} />
               <Skeleton width="64%" height={13} />
@@ -219,8 +237,14 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
           ) : null}
 
           {groups.map((group) => (
-            <Fragment key={group.id}>
-              <p className="pulse-menu__group" role="presentation">
+            // A real `group`, not a bare heading marked presentational: `menu`
+            // only takes menuitems, groups and separators as children, so a
+            // loose line of text between them is a heading a screen reader has
+            // no reason to read out. Naming the group is what carries
+            // "Understand" and "Turn into" into the announcement of each item
+            // under it; the visible line is then only its printed form.
+            <div className="pulse-menu__section" role="group" aria-label={group.label} key={group.id}>
+              <p className="pulse-menu__group" aria-hidden>
                 {group.label}
               </p>
               {group.actions.map((item) => {
@@ -242,7 +266,7 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
                   </button>
                 )
               })}
-            </Fragment>
+            </div>
           ))}
         </div>
       ) : null}
@@ -274,10 +298,19 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
                   <Button
                     icon="copy"
                     onClick={() => {
+                      // `navigator.clipboard` is absent on an insecure origin.
+                      // `clipboard?.writeText(…).then(…)` would short-circuit
+                      // the whole chain and make the press a silent no-op — a
+                      // button wired to nothing. Say what happened instead.
+                      if (typeof navigator.clipboard?.writeText !== 'function') {
+                        setCopy('failed')
+                        return
+                      }
+
                       navigator.clipboard
-                        ?.writeText(result.answer)
-                        .then(() => setCopied(true))
-                        .catch(() => setCopied(false))
+                        .writeText(applied)
+                        .then(() => setCopy('copied'))
+                        .catch(() => setCopy('failed'))
                     }}
                   >
                     Copy
@@ -286,7 +319,11 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
                     icon="plus"
                     disabled={applyBlocked !== undefined}
                     title={applyBlocked}
-                    onClick={() => apply(onInsertBelow, result.answer)}
+                    // A `title` on a disabled button is neither hoverable nor
+                    // announced; the reason is a real line in the body and this
+                    // is what ties the two together.
+                    aria-describedby={applyBlocked ? blockedId : undefined}
+                    onClick={() => apply(onInsertBelow, applied)}
                   >
                     Insert below
                   </Button>
@@ -295,7 +332,8 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
                     icon="check"
                     disabled={applyBlocked !== undefined}
                     title={applyBlocked}
-                    onClick={() => apply(onReplaceNote, result.answer)}
+                    aria-describedby={applyBlocked ? blockedId : undefined}
+                    onClick={() => apply(onReplaceNote, applied)}
                   >
                     Replace note
                   </Button>
@@ -336,7 +374,12 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
             </div>
           ) : null}
 
-          <PulseFailureNotice error={action.error} />
+          <PulseFailureNotice
+            error={action.error}
+            // Not while the language form is up: that form is its own retry,
+            // and re-running needs the option the user is still choosing.
+            onRetry={awaitingLanguage ? undefined : () => run(picked, language.trim() || undefined)}
+          />
 
           {!awaitingLanguage && !action.isPending && !action.error && result === null ? (
             <p className="pulse-menu__empty">That run was stopped. Nothing was changed.</p>
@@ -401,17 +444,63 @@ export function PulseActionMenu({ noteId, capabilities, onReplaceNote, onInsertB
               <CitationList citations={result.citations} />
 
               {applyBlocked ? (
-                <p className="pulse-result__blocked">
+                <p className="pulse-result__blocked" id={blockedId}>
                   <Icon name="lock" size={14} />
                   {applyBlocked}, so this can be copied but not written into it.
+                </p>
+              ) : null}
+
+              {copy === 'failed' ? (
+                <p className="pulse-result__blocked">
+                  <Icon name="alert" size={14} />
+                  This browser would not let Pulse use the clipboard. The answer above can be selected
+                  and copied by hand.
                 </p>
               ) : null}
             </div>
           ) : null}
 
-          <LiveStatus>{copied ? 'Answer copied to the clipboard.' : ''}</LiveStatus>
+          <LiveStatus>
+            {copy === 'copied'
+              ? 'Answer copied to the clipboard.'
+              : copy === 'failed'
+                ? 'Nothing was copied: this browser would not let Pulse use the clipboard.'
+                : ''}
+          </LiveStatus>
         </Dialog>
       ) : null}
     </div>
   )
+}
+
+/**
+ * The text an apply writes: what the preview drew, not what came back.
+ *
+ * `NotesAIService::shape()` parses a checklist or a table out of the model's
+ * JSON and leaves that JSON sitting in `answer`. Writing `answer` would drop a
+ * raw `{"items": …}` into somebody's note while the dialog above it showed a
+ * tidy list — a button doing something other than what it previewed. Copy,
+ * Insert below and Replace note all read this, so none of the three can
+ * disagree with the preview or with each other.
+ */
+function previewText(
+  result: PulseActionResult,
+  items: PulseChecklistItem[],
+  table: PulseTableData | null,
+): string {
+  if (items.length > 0) {
+    return items
+      .map((item) => {
+        const meta = [item.assignee, item.due_at].filter(Boolean).join(' · ')
+
+        return `- ${item.text}${meta === '' ? '' : ` (${meta})`}`
+      })
+      .join('\n')
+  }
+
+  if (table !== null) {
+    return [table.columns, ...table.rows].map((row) => row.join(' | ')).join('\n')
+  }
+
+  return result.answer
 }

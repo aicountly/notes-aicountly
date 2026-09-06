@@ -81,7 +81,10 @@ export function CommentSidebar({ note, onClose, activeBlockId = null, onSelectBl
 
   const post = (body: string, parentId: string | null) => {
     const trimmed = body.trim()
-    if (trimmed === '' || busy) return
+    // Guarded on this one request rather than on `busy`: resolving somebody
+    // else's thread does not stop a comment being written, and a Comment button
+    // that is enabled while the click is silently dropped is a dead control.
+    if (trimmed === '' || create.isPending) return
 
     setError(null)
     create
@@ -122,6 +125,11 @@ export function CommentSidebar({ note, onClose, activeBlockId = null, onSelectBl
     return (
       <li
         key={thread.id}
+        // The ring around the thread for the block the caret is in is a colour
+        // change and nothing else, which says nothing to a screen reader.
+        // aria-current is how that same "this is the one you are in" reaches a
+        // reader who is not looking at the border.
+        aria-current={isActive ? 'true' : undefined}
         className={[
           'collab-thread',
           thread.is_resolved ? 'collab-thread--resolved' : '',
@@ -225,7 +233,10 @@ export function CommentSidebar({ note, onClose, activeBlockId = null, onSelectBl
       </header>
 
       <div className="side-panel__body">
-        {error ? <ErrorNotice error={error} /> : null}
+        {/* A failed post or resolve is dismissible: the control that failed is
+            still on screen to try again with, and without this the sentence
+            stays at the top of the panel for the rest of the session. */}
+        {error ? <ErrorNotice error={error} onDismiss={() => setError(null)} /> : null}
 
         {comments.isPending ? (
           <div className="collab-skeletons" aria-hidden>
@@ -244,7 +255,11 @@ export function CommentSidebar({ note, onClose, activeBlockId = null, onSelectBl
             title="No comments yet"
             description={
               mayComment
-                ? 'Comment on the whole note here, or select text in the note and comment on that.'
+                ? // Says what the box below actually does. Anchoring a comment
+                  // to a paragraph is something the note itself would have to
+                  // offer, and this build has no such control — describing one
+                  // here would send people looking for it.
+                  'Anything written below is visible to everyone this note is shared with.'
                 : 'Nobody has commented on this note.'
             }
             action={

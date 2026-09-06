@@ -220,6 +220,25 @@ describe('VersionHistoryDrawer', () => {
     expect(screen.getByText(/view-only access .* but not\s+restore one/s)).toBeInTheDocument()
   })
 
+  /**
+   * The preview stops at a cap and says so — but only when there is something
+   * past it. A version that ends exactly on the cap is shown whole, and telling
+   * its author the rest is hidden would be a lie about their own note.
+   */
+  it('does not claim there is more when a version ends exactly at the cap', () => {
+    const paragraphs = (count: number) => ({
+      type: 'doc' as const,
+      content: Array.from({ length: count }, (_unused, index) => ({
+        type: 'paragraph',
+        content: [{ type: 'text', text: `Line ${index + 1}` }],
+      })),
+    })
+
+    expect(previewBlocks(paragraphs(200))).toHaveLength(200)
+    // One more than the cap: the extra line is how the panel knows to say so.
+    expect(previewBlocks(paragraphs(400))).toHaveLength(201)
+  })
+
   it('keeps the shape of a document that structure gives meaning to', () => {
     expect(previewBlocks(REVISION_DETAIL.document)).toEqual([
       { kind: 'heading', text: 'Numbers' },

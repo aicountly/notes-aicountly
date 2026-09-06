@@ -126,10 +126,20 @@ final class NoteTemplateService
     /**
      * Create a template, either from scratch or from a note.
      *
-     * `{"from_note_id": "…"}` is "save this note as a template": it needs VIEW
-     * on that note and copies its document, type and tags. Everything else the
-     * request supplies wins over what the note carried, so a save-as can still
-     * be named and described in the same call.
+     * `{"from_note_id": "…"}` is "save this note as a template": it copies the
+     * note's document, type and tags. Everything else the request supplies wins
+     * over what the note carried, so a save-as can still be named and described
+     * in the same call.
+     *
+     * What that copy needs on the source note depends on where the template is
+     * going. A **personal** template is a private copy and needs only VIEW —
+     * it is the same thing the caller could produce by selecting the note and
+     * pasting it. A **company** template is a publication: its document is
+     * readable by every colleague. Widening a note's audience is the owner's
+     * decision alone ({@see NotePermissionService::MANAGE}), so a company
+     * template made from somebody else's note needs that, not the VIEW that
+     * merely reading it needed. Otherwise anyone a note was shared with could
+     * re-share it company-wide, around the gate on `POST /notes/{id}/members`.
      *
      * @param array<string, mixed> $input
      * @return array<string, mixed>
@@ -149,7 +159,7 @@ final class NoteTemplateService
         }
 
         $scope = $this->scope($identity, $input['scope'] ?? self::SCOPE_USER);
-        $source = $this->fromNote($identity, $input['from_note_id'] ?? null);
+        $source = $this->fromNote($identity, $input['from_note_id'] ?? null, $scope);
 
         $name = $this->name($input['name'] ?? ($source['name'] ?? null));
         $noteType = $this->noteType($input['note_type'] ?? ($source['note_type'] ?? 'document'));
@@ -422,9 +432,12 @@ final class NoteTemplateService
     /**
      * The note behind `from_note_id`, reduced to what a template keeps.
      *
+     * `$scope` is the scope the template is being created in, because it is
+     * what decides how much the caller needs on the note: see {@see create()}.
+     *
      * @return array{document: array<string, mixed>, name: string|null, note_type: string, tags: array<int, string>}|null
      */
-    private function fromNote(Identity $identity, mixed $noteId): ?array
+    private function fromNote(Identity $identity, mixed $noteId, string $scope = self::SCOPE_USER): ?array
     {
         if ($noteId === null || $noteId === '') {
             return null;
@@ -438,7 +451,11 @@ final class NoteTemplateService
         $note = $this->permissions->requireNote(
             $identity,
             strtolower((string) $noteId),
-            NotePermissionService::VIEW,
+            // A company template publishes the note's text to every colleague,
+            // which is a sharing decision and therefore the owner's alone.
+            $scope === self::SCOPE_TENANT
+                ? NotePermissionService::MANAGE
+                : NotePermissionService::VIEW,
         );
 
         if ((string) ($note['privacy_mode'] ?? 'standard') === 'private') {

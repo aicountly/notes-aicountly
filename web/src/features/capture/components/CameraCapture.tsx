@@ -58,8 +58,11 @@ export function CameraCapture({
   const [state, setState] = useState<CameraState>('starting')
   const [message, setMessage] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
+  /** True once the element reports a frame size. Until then a shot is 0×0. */
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
+    setReady(false)
     if (!isCameraSupported()) {
       setState('unavailable')
       setMessage(
@@ -118,6 +121,23 @@ export function CameraCapture({
     }
   }, [attempt, facingMode])
 
+  /**
+   * Hand the stream to the element once both exist.
+   *
+   * The assignment in the effect above only lands when a `<video>` is already
+   * mounted, and after a denial it is not: that branch renders the explanation
+   * instead. Retrying from there would set `live`, mount the element for the
+   * first time — and leave it with no source, showing a black stage under a
+   * shutter button that captures nothing.
+   */
+  useEffect(() => {
+    if (state !== 'live') return
+    const video = videoRef.current
+    if (video && streamRef.current && video.srcObject !== streamRef.current) {
+      video.srcObject = streamRef.current
+    }
+  }, [state])
+
   const capture = useCallback(() => {
     const video = videoRef.current
     if (!video || video.videoWidth === 0) return
@@ -167,15 +187,20 @@ export function CameraCapture({
           autoPlay
           playsInline
           muted
+          onLoadedMetadata={(event) => setReady(event.currentTarget.videoWidth > 0)}
           // The preview carries no information a screen reader can use, and the
           // shutter button below is the labelled control.
           aria-hidden
         />
-        {state === 'starting' ? <p className="cam__starting">Starting the camera…</p> : null}
+        {state !== 'live' || !ready ? (
+          <p className="cam__starting">Starting the camera…</p>
+        ) : null}
       </div>
 
       <div className="cam__bar">
-        <Button variant="primary" icon="scan" disabled={state !== 'live'} onClick={capture}>
+        {/* Enabled only once there is a frame to take: `capture` reads
+            `videoWidth`, so a click before then is a click that does nothing. */}
+        <Button variant="primary" icon="scan" disabled={state !== 'live' || !ready} onClick={capture}>
           {shutterLabel}
         </Button>
         {fallback}

@@ -41,13 +41,22 @@ use Aicountly\Api\Env;
  *
  * ## Sandbox detection
  *
- * The zone test is the one Pulse's `ProductApiResolver::isSandboxHost()` uses,
- * which is in turn the one `web/src/auth/hostnames.ts` ships — both came from
- * books-react-app. It differs from those two deliberately in one place, and
- * only one: **an unrecognised host resolves to sandbox here, not production.**
- * The frontend's copy answers "is this build a sandbox build", where guessing
- * wrong costs a redirect. This copy decides which company's live data a
- * server-to-server call reaches, so it fails towards the empty environment.
+ * The zone patterns are the ones Pulse's `ProductApiResolver::isSandboxHost()`
+ * uses, which are in turn the ones `web/src/auth/hostnames.ts` ships — all from
+ * books-react-app. The one difference that matters is deliberate: **an
+ * unrecognised host resolves to sandbox here, not production.** Both of those
+ * copies `return false` at the end. For the frontend that is right — it answers
+ * "is this build a sandbox build", where guessing wrong costs a redirect. For
+ * Pulse's server-side copy, which is doing exactly this job, it is a divergence
+ * and not a difference of purpose: this copy decides which company's live data a
+ * server-to-server call reaches, so it fails towards the empty environment. Sync
+ * the patterns with those files; do not sync the fallback away.
+ *
+ * (The localhost test is also spelled differently — an exact match plus a
+ * `.localhost` suffix and a stripped port here, `str_contains($host, 'localhost')`
+ * in Pulse. They agree everywhere except on a production name that merely
+ * contains the word, such as `my-localhost.aicountly.com`, which Pulse's test
+ * would call a development machine.)
  */
 final class SiblingApi
 {
