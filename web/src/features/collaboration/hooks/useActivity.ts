@@ -11,7 +11,7 @@
  * collapses a burst into, which a cursor would then skip past.
  */
 
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import type { UseQueryResult } from '@tanstack/react-query'
 
 import { ApiError, api } from '../../../shared/api/client'
@@ -34,6 +34,9 @@ export function useNoteActivity(
     // cache and make the button look broken.
     queryKey: [...queryKeys.notes.activity(noteId ?? ''), limit],
     enabled: noteId !== null,
+    // "Show earlier" is the same trail at a larger size. Without this the new
+    // key has no data and the whole list would blink out to a skeleton.
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const { data, meta } = await api.getWithMeta<ActivityEntry[]>(`/notes/${noteId}/activity`, {
         query: { limit },

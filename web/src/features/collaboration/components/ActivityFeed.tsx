@@ -93,6 +93,18 @@ function plural(count: number, one: string, many: string): string {
  * action this build has never heard of still says something — the raw code with
  * its punctuation removed, rather than a blank line.
  */
+function roleNounFor(role: string | null): string | null {
+  switch (role) {
+    case 'owner':
+    case 'editor':
+    case 'commenter':
+    case 'viewer':
+      return ROLE_NOUN[role]
+    default:
+      return null
+  }
+}
+
 export function describeActivity(
   group: ActivityGroup,
   nameFor: (userId: string) => string,
@@ -100,10 +112,15 @@ export function describeActivity(
   const { action, count, context } = group
 
   const actor = nameFor(group.actorUserId)
-  const string = (key: string): string | null =>
-    typeof context[key] === 'string' ? (context[key] as string) : null
-  const number = (key: string): number | null =>
-    typeof context[key] === 'number' ? (context[key] as number) : null
+
+  const contextString = (key: string): string | null => {
+    const value = context[key]
+    return typeof value === 'string' ? value : null
+  }
+  const contextNumber = (key: string): number | null => {
+    const value = context[key]
+    return typeof value === 'number' ? value : null
+  }
 
   // "…with You" is not a sentence; as the object of one, it is lower case.
   const objectName = (userId: string | null): string => {
@@ -112,8 +129,7 @@ export function describeActivity(
     return name === 'You' ? 'you' : name
   }
 
-  const role = string('role')
-  const roleNoun = role !== null && role in ROLE_NOUN ? ROLE_NOUN[role as NoteRole] : null
+  const roleNoun = roleNounFor(contextString('role'))
 
   const phrase = ((): string => {
     switch (action) {
@@ -128,25 +144,25 @@ export function describeActivity(
       case 'note.moved': return 'moved it to another notebook'
 
       case 'note.version_restored': {
-        const version = number('revision_number')
+        const version = contextNumber('revision_number')
         return version === null ? 'restored an earlier version' : `restored version ${version}`
       }
 
       case 'member.added':
         return count > 1
           ? `shared this note with ${count} people`
-          : `shared this note with ${objectName(string('member_user_id'))}`
+          : `shared this note with ${objectName(contextString('member_user_id'))}`
 
       case 'member.removed':
         return count > 1
           ? `removed ${count} people from this note`
-          : `removed ${objectName(string('member_user_id'))} from this note`
+          : `removed ${objectName(contextString('member_user_id'))} from this note`
 
       case 'member.role_changed':
         if (count > 1) return `changed access for ${count} people`
         return roleNoun === null
-          ? `changed ${objectName(string('member_user_id'))}’s access`
-          : `made ${objectName(string('member_user_id'))} ${roleNoun}`
+          ? `changed ${objectName(contextString('member_user_id'))}’s access`
+          : `made ${objectName(contextString('member_user_id'))} ${roleNoun}`
 
       case 'comment.added': return count > 1 ? `added ${count} comments` : 'commented'
       case 'comment.updated': return count > 1 ? `edited ${count} comments` : 'edited a comment'

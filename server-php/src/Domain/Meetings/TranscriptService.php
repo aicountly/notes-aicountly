@@ -9,6 +9,7 @@ use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Attachments\AttachmentService;
 use Aicountly\Api\Domain\Collaboration\NotePermissionService;
 use Aicountly\Api\Http\ApiException;
+use Aicountly\Api\Support\Clock;
 use Aicountly\Api\Support\Str;
 use Aicountly\Api\Support\Uuid;
 
@@ -134,7 +135,7 @@ final class TranscriptService
                     // Cleared together: a transcript with no correction must not
                     // carry the name of whoever removed the last one.
                     'edited_by' => $corrected === null ? null : $identity->userId,
-                    'edited_at' => $corrected === null ? null : 'now',
+                    'edited_at' => $corrected === null ? null : Clock::iso(),
                 ],
             );
 
@@ -257,9 +258,10 @@ final class TranscriptService
             $status = 'completed';
         }
 
-        $bindings = [
-            'note_id' => $noteId,
-            'provider' => $provider,
+        // Bound exactly, per statement: PDO refuses an execute() carrying a
+        // parameter the statement does not name, so a shared binding array
+        // reused across an INSERT and a narrower UPDATE fails at runtime.
+        $content = [
             'model' => self::nullableText($transcript['model'] ?? null, 120),
             'language' => self::nullableText($transcript['language'] ?? null, 16),
             'status' => $status,
@@ -273,7 +275,7 @@ final class TranscriptService
             ),
         ];
 
-        return Connection::transaction(function () use ($noteId, $provider, $bindings): array {
+        return Connection::transaction(function () use ($noteId, $provider, $content): array {
             $existing = Connection::selectOne(
                 'SELECT id FROM note_transcripts
                   WHERE note_id = :note_id AND attachment_id IS NULL AND provider = :provider
@@ -289,7 +291,7 @@ final class TranscriptService
                         SET model = :model, language = :language, status = :status,
                             text = :text, segments = :segments::jsonb, updated_at = now()
                       WHERE id = :id',
-                    $bindings + ['id' => $existing['id']],
+                    $content + ['id' => $existing['id']],
                 );
                 $id = (string) $existing['id'];
             } else {
@@ -298,7 +300,7 @@ final class TranscriptService
                     'INSERT INTO note_transcripts
                         (id, note_id, attachment_id, provider, model, language, status, text, segments)
                      VALUES (:id, :note_id, NULL, :provider, :model, :language, :status, :text, :segments::jsonb)',
-                    $bindings + ['id' => $id],
+                    $content + ['id' => $id, 'note_id' => $noteId, 'provider' => $provider],
                 );
             }
 

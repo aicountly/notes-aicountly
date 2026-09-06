@@ -5,17 +5,17 @@
  *
  *   - **The server is the authority on what may be attached.** Everything in
  *     {@link describeFileRejection} is a courtesy so the user is told "that is
- *     28 MB and the limit is 25" before they wait for the upload, rather than
+ *     28 MB and the limit is 25" before they wait for the upload rather than
  *     after. It is not a control: the bytes are inspected server-side and a
  *     file that lies about its type is refused there. Never soften a server
  *     rejection because this passed.
  *   - **Processing is asynchronous and finite.** OCR and transcription are
- *     queued, so a fresh attachment arrives `queued` and becomes `completed`
+ *     queued, so a fresh attachment arrives `queued` and turns `completed`
  *     minutes later. This polls with a backoff and then *stops* — a tab left
  *     open on a note must not hold a request every two seconds forever. When
  *     the window closes the UI says so and offers to look again.
  *   - **Uploading needs a network.** There is no `attachment.upload` operation
- *     in the offline queue, so an upload attempted offline fails and says so,
+ *     in the offline queue, so an upload attempted offline fails and says so
  *     rather than pretending the file is safe on the device.
  */
 
@@ -32,16 +32,17 @@ import type { Attachment, AttachmentKind } from '../../../shared/api/types'
 // Polling
 // ---------------------------------------------------------------------------
 
-/**
- * 2s, 4s, 8s, then every 15s, and give up after three minutes.
- *
- * Expressed as elapsed-time bands rather than an attempt counter so the
- * schedule is a pure function of when watching started — a re-render, a
- * remount or a second component watching the same note all land on the same
- * step instead of restarting the sequence.
- */
+/** Watching stops here. Three minutes is longer than any job this UI waits on. */
 const POLL_WINDOW_MS = 3 * 60_000
 
+/**
+ * 2s, 4s, 8s, then every 15s.
+ *
+ * Expressed as elapsed-time bands rather than an attempt counter so the
+ * schedule is a pure function of when watching started: a re-render, a remount
+ * or a second component watching the same note all land on the same step
+ * instead of restarting the sequence.
+ */
 export function pollIntervalFor(elapsedMs: number): number | false {
   if (elapsedMs >= POLL_WINDOW_MS) return false
   if (elapsedMs < 2_000) return 2_000
@@ -52,10 +53,7 @@ export function pollIntervalFor(elapsedMs: number): number | false {
 
 /** True while the server still has work queued for this file. */
 export function isProcessing(attachment: Attachment): boolean {
-  return (
-    attachment.processing_status === 'queued' ||
-    attachment.processing_status === 'processing'
-  )
+  return attachment.processing_status === 'queued' || attachment.processing_status === 'processing'
 }
 
 // ---------------------------------------------------------------------------
@@ -66,9 +64,9 @@ export function isProcessing(attachment: Attachment): boolean {
  * Extensions the server refuses outright, mirrored here only to fail fast.
  *
  * Deliberately the shorter list: these are the ones a person plausibly tries
- * to attach (a saved web page, an SVG logo, a script) and being told
- * immediately is kinder than a round trip. The server's list is longer and is
- * the one that decides.
+ * to attach — a saved web page, an SVG logo, a script — and being told at once
+ * is kinder than a round trip. The server's list is longer and is the one that
+ * decides.
  */
 const REFUSED_EXTENSIONS = new Set([
   'html', 'htm', 'xhtml', 'shtml', 'svg', 'js', 'mjs', 'cjs', 'wasm',
@@ -92,7 +90,7 @@ export function formatBytes(bytes: number): string {
 /**
  * Why this file cannot be attached, or null when nothing obvious is wrong.
  *
- * "Nothing obvious is wrong" is the strongest claim this can make. The bytes
+ * "Nothing obvious is wrong" is the strongest claim this can make: the bytes
  * have not been read here and the type has not been verified — only the name
  * and the size, both of which the browser took from the user.
  */
@@ -124,6 +122,18 @@ export function kindFromMimeType(mimeType: string): AttachmentKind {
   return 'file'
 }
 
+/** The server's sentence where there is one; offline is its own answer. */
+export function describeUploadError(error: unknown, filename: string): string {
+  if (error instanceof ApiError) {
+    if (error.isOffline) {
+      return `${filename} needs a connection to upload. It has not been attached.`
+    }
+    const field = error.fieldErrors.file ?? error.fieldErrors.content_type
+    return field ?? error.message
+  }
+  return `${filename} could not be attached. Please try again.`
+}
+
 // ---------------------------------------------------------------------------
 // Reaching the bytes
 // ---------------------------------------------------------------------------
@@ -131,10 +141,10 @@ export function kindFromMimeType(mimeType: string): AttachmentKind {
 /**
  * An address for the file itself.
  *
- * `content_url` is the path the presenter hands out; it is relative to the API
- * root, so it has to be joined to the base URL before a browser can follow it.
- * The endpoint re-checks the caller's permission on every request, which is
- * why there is no signed link cached anywhere in this feature.
+ * `content_url` is the path the presenter hands out and it is relative to the
+ * API root, so it has to be joined to the base URL before a browser can follow
+ * it. The endpoint re-checks the caller's permission on every request, which
+ * is why nothing in this feature caches a link to a file.
  */
 export function attachmentContentUrl(attachment: Attachment): string {
   return `${getApiBaseUrl()}${attachment.content_url}`
@@ -154,8 +164,9 @@ export interface UploadOptions {
  * Store one file on a note.
  *
  * Narrow on purpose: the editor calls this for a pasted screenshot or a
- * dropped image and wants an {@link Attachment} back, not a React hook and not
- * a cache. Callers that also need the list refreshed use {@link useAttachments}.
+ * dropped image and wants an {@link Attachment} back — not a React hook, and
+ * not a cache. Callers that also need the list refreshed use
+ * {@link useAttachments}.
  */
 export async function uploadFile(
   noteId: string,
@@ -163,8 +174,8 @@ export async function uploadFile(
   options: UploadOptions = {},
 ): Promise<Attachment> {
   const form = new FormData()
-  // The field name the server reads is `file`; `block_id` is optional and is
-  // what links an image in the document back to its row in the attachment list.
+  // `file` is the field the server reads; `block_id` is what ties an image in
+  // the document back to its row in the attachment list.
   form.append('file', file, file.name)
   if (options.blockId) form.append('block_id', options.blockId)
 
@@ -174,9 +185,9 @@ export async function uploadFile(
 /**
  * The uploader the editor plugs into paste and drop handling.
  *
- * Returns the shape `ImageUploader` expects — a URL to render plus the id that
- * ties the image node to its attachment — without this feature importing the
- * editor, which is a sibling and not a dependency.
+ * Returns the shape the editor's `ImageUploader` expects — a URL to render
+ * plus the id that ties the image node to its attachment — without this
+ * feature importing the editor, which is a sibling rather than a dependency.
  */
 export function useImageUploader(noteId: string | undefined) {
   const client = useQueryClient()
@@ -208,9 +219,9 @@ export function useImageUploader(noteId: string | undefined) {
 /**
  * A file on its way to the server.
  *
- * Kept in component state rather than in the query cache: it is not an
- * attachment yet, and putting a half-real row in the cache is how a list ends
- * up showing a file that does not exist after a refetch.
+ * Held in component state rather than in the query cache: it is not an
+ * attachment yet, and a half-real row in the cache is how a list ends up
+ * showing a file that vanishes on the next refetch.
  */
 export interface PendingUpload {
   key: string
@@ -237,7 +248,7 @@ export interface UseAttachmentsResult {
   error: ApiError | null
   /** True while the server still has work queued for at least one file. */
   isBusy: boolean
-  /** True once watching stopped without the work finishing. */
+  /** True once watching stopped without that work finishing. */
   watchExpired: boolean
   refetch: () => void
   /** Start watching again after {@link watchExpired}. */
@@ -277,7 +288,7 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
   const rows = list.data ?? []
   const isBusy = rows.some(isProcessing)
 
-  // The interval above stops on its own; this is what lets the UI say so
+  // The interval above stops on its own; this is what lets the UI say so,
   // instead of leaving a spinner turning over a poll that has ended.
   useEffect(() => {
     if (!isBusy) {
@@ -297,8 +308,8 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
     return () => window.clearTimeout(timer)
   }, [isBusy])
 
-  // Object URLs are a document-lifetime leak until they are revoked, and a
-  // note with twenty scanned pages open all day is exactly where that shows.
+  // An object URL lives as long as the document unless it is revoked, and a
+  // note with twenty scanned pages open all day is where that starts to show.
   const objectUrls = useRef<Set<string>>(new Set())
   useEffect(() => {
     const urls = objectUrls.current
@@ -309,7 +320,7 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
   }, [])
 
   const releasePreview = useCallback((url: string | null) => {
-    if (!url) return
+    if (!url || !objectUrls.current.has(url)) return
     URL.revokeObjectURL(url)
     objectUrls.current.delete(url)
   }, [])
@@ -321,14 +332,20 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
     void client.invalidateQueries({ queryKey: queryKeys.notes.detail(noteId) })
   }, [client, noteId])
 
+  /** Upload one queued row, leaving it in place with its message on failure. */
   const send = useCallback(
     async (item: PendingUpload, options: UploadOptions): Promise<Attachment | null> => {
+      if (!noteId) return null
+
       setPending((current) =>
         current.map((row) => (row.key === item.key ? { ...row, uploading: true, error: null } : row)),
       )
 
       try {
-        const attachment = await uploadFile(item.file, item, options)
+        const attachment = await uploadFile(noteId, item.file, options)
+        releasePreview(item.previewUrl)
+        setPending((current) => current.filter((row) => row.key !== item.key))
+        invalidate()
         return attachment
       } catch (error) {
         setPending((current) =>
@@ -341,8 +358,106 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
         return null
       }
     },
-    [],
+    [invalidate, noteId, releasePreview],
   )
+
+  const upload = useCallback(
+    async (files: FileList | File[], options: UploadOptions = {}): Promise<Attachment[]> => {
+      if (!noteId) return []
+
+      const queued: PendingUpload[] = Array.from(files).map((file) => {
+        const rejection = describeFileRejection(file, maxBytes)
+        // Only an image gets a local preview: an object URL for a 40 MB video
+        // buys nothing on a row that shows a filename and a size.
+        const previewUrl =
+          rejection === null && file.type.startsWith('image/') ? URL.createObjectURL(file) : null
+        if (previewUrl) objectUrls.current.add(previewUrl)
+
+        return {
+          key: newKey(),
+          file,
+          filename: file.name,
+          byteSize: file.size,
+          kind: kindFromMimeType(file.type),
+          previewUrl,
+          uploading: false,
+          error: rejection,
+        }
+      })
+
+      setPending((current) => [...current, ...queued])
+
+      // One at a time: uploads share a rate-limit bucket on the server, and a
+      // burst of ten is how a drop of a folder turns into a 429.
+      const stored: Attachment[] = []
+      for (const item of queued) {
+        if (item.error !== null) continue
+        const attachment = await send(item, options)
+        if (attachment) stored.push(attachment)
+      }
+
+      return stored
+    },
+    [maxBytes, noteId, send],
+  )
+
+  const retryPending = useCallback(
+    (key: string) => {
+      const item = pending.find((row) => row.key === key)
+      if (!item || item.uploading) return
+      void send(item, {})
+    },
+    [pending, send],
+  )
+
+  const dismissPending = useCallback(
+    (key: string) => {
+      setPending((current) => {
+        const item = current.find((row) => row.key === key)
+        releasePreview(item?.previewUrl ?? null)
+        return current.filter((row) => row.key !== key)
+      })
+    },
+    [releasePreview],
+  )
+
+  const attachDriveFile = useCallback(
+    async (driveFileId: string, options: UploadOptions = {}): Promise<Attachment> => {
+      if (!noteId) throw new ApiError('NO_NOTE', 'Open a note first.', 0)
+
+      const attachment = await api.post<Attachment>(`/notes/${noteId}/attachments/link-drive`, {
+        drive_file_id: driveFileId,
+        block_id: options.blockId ?? null,
+      })
+      invalidate()
+      return attachment
+    },
+    [invalidate, noteId],
+  )
+
+  const remove = useCallback(
+    async (attachmentId: string) => {
+      if (!noteId) return
+      setRemovingId(attachmentId)
+      try {
+        await api.delete(`/notes/${noteId}/attachments/${attachmentId}`)
+        invalidate()
+      } finally {
+        setRemovingId(null)
+      }
+    },
+    [invalidate, noteId],
+  )
+
+  const checkAgain = useCallback(() => {
+    pollStartedAt.current = Date.now()
+    setWatchExpired(false)
+    void list.refetch()
+  }, [list])
+
+  const refetch = useCallback(() => {
+    void list.refetch()
+  }, [list])
 
   return {
     attachments: rows,
@@ -352,19 +467,13 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
     error: list.error ?? null,
     isBusy,
     watchExpired,
-    refetch: () => void list.refetch(),
-    checkAgain: () => {
-      pollStartedAt.current = Date.now()
-      setWatchExpired(false)
-      void list.refetch()
-    },
-    upload: async () => [],
-    retryPending: () => undefined,
-    dismissPending: () => undefined,
-    attachDriveFile: async () => {
-      throw new Error('unreachable')
-    },
-    remove: async () => undefined,
+    refetch,
+    checkAgain,
+    upload,
+    retryPending,
+    dismissPending,
+    attachDriveFile,
+    remove,
     removingId,
     maxBytes,
   }
