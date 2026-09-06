@@ -288,16 +288,22 @@ jobs:
           # runtime on every request, unlike the web build. It must never be
           # uploaded and must never be deleted, hence the excludes below
           # combined with --delete.
+          # tests/ is a development tool and would be publicly reachable inside
+          # the document root. storage/ holds uploaded attachment bytes that
+          # exist only on the server, so --delete must not touch it.
           rsync -avz --delete \
             --exclude='.env' \
             --exclude='.env.*' \
             --exclude='.git*' \
+            --exclude='tests/' \
+            --exclude='storage/' \
             --chmod=D755,F644 \
             -e ssh \
             server-php/ "deploy-target:$REMOTE_ROOT/api/"
 
           echo "Deployed server-php to \$REMOTE_ROOT/api/"
           echo "::notice::If this is the first API deploy, create api/.env on the server from server-php/.env.example — it is never uploaded."
+          echo "::notice::If this release adds a migration, run it once over SSH: cd $REMOTE_ROOT/api && php bin/migrate.php up && php bin/migrate.php seed"
 
       # A deployed API that cannot answer is worth knowing about now rather
       # than from the app's login screen. /health needs no credentials.
