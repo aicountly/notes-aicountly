@@ -252,11 +252,20 @@ final class AttachmentService
 
         // The offline queue replays what it could not send. A create it already
         // applied must not become a second copy of the same file.
+        //
+        // Scoped to this note on purpose: the id comes from the client, so
+        // "return whatever row has this id" would turn a guessed UUID into a
+        // read of somebody else's attachment. A collision outside this note is
+        // refused without saying what it collided with.
         $existing = Connection::selectOne(
             'SELECT ' . self::COLUMNS . ' FROM note_attachments WHERE id = :id',
             ['id' => $attachmentId],
         );
         if ($existing !== null) {
+            if ((string) $existing['note_id'] !== $noteId) {
+                throw ApiException::validation(['id' => 'That attachment id is already in use.']);
+            }
+
             return self::present($existing);
         }
 
@@ -575,6 +584,15 @@ final class AttachmentService
         $attachmentId = (string) $attachment['id'];
         $queued = 0;
 
+        // A private note is skipped whole, the same way NotesService skips its
+        // links and checklist extraction. Its content is meant to be unreadable
+        // here, and sending one of its files to an OCR service — or indexing
+        // what came back — would be the first step away from that promise.
+        $note = Connection::selectOne('SELECT privacy_mode FROM notes WHERE id = :id', ['id' => $noteId]);
+        if ((string) ($note['privacy_mode'] ?? 'standard') === 'private') {
+            return 0;
+        }
+
         $queue = function (string $type) use ($identity, $noteId, $attachmentId, &$queued): void {
             if ($this->jobs->enqueue($identity, $type, $noteId, $attachmentId) !== null) {
                 $queued++;
@@ -742,47 +760,51 @@ final class AttachmentService
      */
     private function insert(Identity $identity, array $values): array
     {
-        Connection::execute(
-            'INSERT INTO note_attachments
-                (id, note_id, block_id, storage_provider, storage_key, drive_file_id,
-                 filename, mime_type, byte_size, checksum_sha256, kind,
-                 upload_status, processing_status, metadata, created_by)
-             VALUES
-                (:id, :note_id, :block_id, :storage_provider, :storage_key, :drive_file_id,
-                 :filename, :mime_type, :byte_size, :checksum, :kind,
-                 \'ready\', \'pending\', :metadata::jsonb, :actor)',
-            [
-                'id' => $values['id'],
-                'note_id' => $values['note_id'],
-                'block_id' => $values['block_id'],
-                'storage_provider' => $values['storage_provider'],
-                'storage_key' => $values['storage_key'],
-                'drive_file_id' => $values['drive_file_id'],
-                'filename' => $values['filename'],
-                'mime_type' => $values['mime_type'],
-                'byte_size' => $values['byte_size'],
-                'checksum' => $values['checksum'],
-                'kind' => $values['kind'],
-                'metadata' => json_encode($values['metadata'], JSON_UNESCAPED_SLASHES),
-                'actor' => $identity->userId,
-            ],
-        );
-
-        $row = $this->requireAttachment((string) $values['note_id'], (string) $values['id']);
-
-        // Queued after the row exists, so a worker that claims the job in the
-        // same second finds something to work on.
-        if ($this->enqueueProcessing($identity, $row) > 0) {
-            $row['processing_status'] = 'queued';
-        } else {
+        return Connection::transaction(function () use ($identity, $values): array {
             Connection::execute(
-                'UPDATE note_attachments SET processing_status = \'skipped\' WHERE id = :id',
-                ['id' => $values['id']],
+                'INSERT INTO note_attachments
+                    (id, note_id, block_id, storage_provider, storage_key, drive_file_id,
+                     filename, mime_type, byte_size, checksum_sha256, kind,
+                     upload_status, processing_status, metadata, created_by)
+                 VALUES
+                    (:id, :note_id, :block_id, :storage_provider, :storage_key, :drive_file_id,
+                     :filename, :mime_type, :byte_size, :checksum, :kind,
+                     \'ready\', \'pending\', :metadata::jsonb, :actor)',
+                [
+                    'id' => $values['id'],
+                    'note_id' => $values['note_id'],
+                    'block_id' => $values['block_id'],
+                    'storage_provider' => $values['storage_provider'],
+                    'storage_key' => $values['storage_key'],
+                    'drive_file_id' => $values['drive_file_id'],
+                    'filename' => $values['filename'],
+                    'mime_type' => $values['mime_type'],
+                    'byte_size' => $values['byte_size'],
+                    'checksum' => $values['checksum'],
+                    'kind' => $values['kind'],
+                    'metadata' => json_encode($values['metadata'], JSON_UNESCAPED_SLASHES),
+                    'actor' => $identity->userId,
+                ],
             );
-            $row['processing_status'] = 'skipped';
-        }
 
-        return $row;
+            $row = $this->requireAttachment((string) $values['note_id'], (string) $values['id']);
+
+            // Queued after the row exists — a worker claiming the job in the
+            // same second has to find something to work on — and inside the
+            // same transaction, so a file never appears on a note with the work
+            // it needs missing.
+            if ($this->enqueueProcessing($identity, $row) > 0) {
+                $row['processing_status'] = 'queued';
+            } else {
+                Connection::execute(
+                    'UPDATE note_attachments SET processing_status = \'skipped\' WHERE id = :id',
+                    ['id' => $values['id']],
+                );
+                $row['processing_status'] = 'skipped';
+            }
+
+            return $row;
+        });
     }
 
     /** @return array<string, mixed> */

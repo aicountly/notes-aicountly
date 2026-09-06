@@ -15,7 +15,6 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
 
 import { AppConfigProvider } from '../../../app/AppConfigProvider'
 import { NoteCard } from './NoteCard'
@@ -81,7 +80,7 @@ function Location() {
   return <span data-testid="location">{useLocation().pathname}</span>
 }
 
-function renderCard(note: NoteSummary): ReactNode {
+function renderCard(note: NoteSummary): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -96,7 +95,6 @@ function renderCard(note: NoteSummary): ReactNode {
       </AppConfigProvider>
     </QueryClientProvider>,
   )
-  return null
 }
 
 beforeEach(() => {

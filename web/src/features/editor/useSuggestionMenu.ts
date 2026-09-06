@@ -42,11 +42,14 @@ export function useSuggestionMenu(bridge: SuggestionBridge): SuggestionMenuContr
       if (!current || count === 0) return false
 
       switch (event.key) {
+        // Updated from the previous value rather than from the rendered one:
+        // two arrow presses inside a single React batch must move two rows,
+        // not the same row twice.
         case 'ArrowDown':
-          setActiveIndex((index + 1) % count)
+          setActiveIndex((current) => (current + 1) % count)
           return true
         case 'ArrowUp':
-          setActiveIndex((index - 1 + count) % count)
+          setActiveIndex((current) => (current - 1 + count) % count)
           return true
         case 'Home':
           setActiveIndex(0)

@@ -272,6 +272,75 @@ final class AttachmentsTest extends TestCase
         $this->assertSame(422, $this->upload($this->alice, $note['id'], 'empty.txt', '')['status']);
     }
 
+    public function testAnIdFromAnotherNoteIsRefusedWithoutRevealingIt(): void
+    {
+        $mine = $this->note();
+        $theirs = $this->bob->post('/notes', ['document' => Support::doc('bob writes')])['body']['data'];
+        $bobs = $this->upload($this->bob, $theirs['id'], 'bobs-secret.png', self::png())['body']['data'];
+
+        // The id is chosen by the client, so guessing one must not become a way
+        // to read the row it belongs to.
+        $result = $this->upload($this->alice, $mine['id'], 'mine.png', self::png(), ['id' => $bobs['id']]);
+
+        $this->assertSame(422, $result['status']);
+        $this->assertFalse(str_contains((string) json_encode($result['body']), 'bobs-secret'));
+    }
+
+    // -- multipart ----------------------------------------------------------
+    //
+    // The happy path cannot be driven from here: PHP populates $_FILES itself
+    // and `is_uploaded_file()` — the check that stops this endpoint reading
+    // arbitrary paths off the server — is false for anything the test writes.
+    // What is asserted is the handling around it.
+
+    public function testAnUploadRejectedByPhpItselfIsReportedAsASizeProblem(): void
+    {
+        $note = $this->note();
+        $_FILES = ['file' => [
+            'name' => 'huge.png',
+            'type' => 'image/png',
+            'tmp_name' => '',
+            'error' => UPLOAD_ERR_INI_SIZE,
+            'size' => 0,
+        ]];
+
+        try {
+            $result = $this->alice->post('/notes/' . $note['id'] . '/attachments');
+        } finally {
+            $_FILES = [];
+        }
+
+        $this->assertSame(422, $result['status']);
+        $this->assertContainsString('larger than this server accepts', $result['body']['error']['details']['fields']['file']);
+    }
+
+    public function testAMultipartPathThatIsNotAnUploadIsRefused(): void
+    {
+        $note = $this->note();
+        $planted = $this->storage . '/planted.txt';
+        @mkdir($this->storage, 0700, true);
+        file_put_contents($planted, 'server-side file');
+
+        $_FILES = ['file' => [
+            'name' => 'innocent.txt',
+            'type' => 'text/plain',
+            'tmp_name' => $planted,
+            'error' => UPLOAD_ERR_OK,
+            'size' => 16,
+        ]];
+
+        try {
+            $result = $this->alice->post('/notes/' . $note['id'] . '/attachments');
+        } finally {
+            $_FILES = [];
+        }
+
+        // Without the is_uploaded_file() gate this would attach a file from the
+        // server's own disk to a note.
+        $this->assertSame(400, $result['status']);
+        $this->assertCount(0, $this->alice->get('/notes/' . $note['id'] . '/attachments')['body']['data']);
+    }
+
     // -- Download -----------------------------------------------------------
 
     public function testDownloadStreamsTheBytesAsAnAttachment(): void
