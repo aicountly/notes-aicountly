@@ -13,7 +13,7 @@
  * this" and "where do I keep that" — and merging them buries the notes.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 
@@ -268,7 +268,7 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
             id={inputId}
             data-autofocus
             className="search__input"
-            type="search"
+            type="text"
             role="combobox"
             autoComplete="off"
             placeholder="Search notes, notebooks and tags…"
@@ -339,15 +339,12 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
           </p>
         ) : null}
 
-        <div className="search__tabs" role="tablist" aria-label="Result type">
+        <div className="search__tabs" role="group" aria-label="Result type">
           {TABS.map((entry) => (
             <button
               key={entry.value}
               type="button"
-              role="tab"
-              id={`search-tab-${entry.value}`}
-              aria-selected={tab === entry.value}
-              aria-controls={listId}
+              aria-pressed={tab === entry.value}
               className={`search__tab ${tab === entry.value ? 'search__tab--active' : ''}`}
               onClick={() => setTab(entry.value)}
             >
@@ -415,18 +412,19 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
             <>
               <ul className="search__results" role="listbox" id={listId} aria-label="Search results">
                 {rows.map((row, position) => {
-                  const showGroup = tab === 'all' && (position === 0 || rows[position - 1].group !== row.group)
+                  const showGroup =
+                    tab === 'all' && (position === 0 || rows[position - 1].group !== row.group)
 
                   return (
-                    <li key={row.key} className="search__row-wrap">
+                    <Fragment key={row.key}>
                       {showGroup ? (
-                        <p className="search__group" role="presentation">
+                        <li role="presentation" className="search__group">
                           {row.group}
-                        </p>
+                        </li>
                       ) : null}
-                      <div
+                      <li
                         ref={(element) => {
-                          optionRefs.current[position] = element as HTMLLIElement | null
+                          optionRefs.current[position] = element
                         }}
                         id={`${listId}-option-${position}`}
                         role="option"
@@ -436,8 +434,8 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
                         onClick={() => openRow(row)}
                       >
                         <ResultRow row={row} markers={search.data?.markers} />
-                      </div>
-                    </li>
+                      </li>
+                    </Fragment>
                   )
                 })}
               </ul>
@@ -574,7 +572,7 @@ function RecentSearches({
   return (
     <section className="search__recent" aria-label="Recent searches">
       <header className="search__recent-header">
-        <h3 className="search__group">Recent searches</h3>
+        <h3 className="search__recent-title">Recent searches</h3>
         <Button variant="ghost" size="sm" icon="trash" onClick={onClear}>
           Clear
         </Button>

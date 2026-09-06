@@ -10,10 +10,12 @@
 .nb-tree { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .nb-tree--nested { margin-top: 1px; }
 
-/* Each level adds one step. The custom property is set per row in the markup
-   from the node's depth, which keeps the rule count independent of MAX_DEPTH. */
+/* Each level adds one step, and every level leaves room for the twisty so a
+   leaf's name still lines up with its siblings'. The step count is a custom
+   property set per row from the node's depth, which keeps the rule count
+   independent of how deep the tree is allowed to go. */
 .nb-tree .org-row > .nav-item {
-  padding-left: calc(var(--notes-space-2) + var(--nb-level, 0) * var(--notes-space-4));
+  padding-left: calc(var(--notes-space-2) + 20px + var(--nb-level, 0) * var(--notes-space-4));
 }
 
 .nb-twisty {
@@ -34,8 +36,15 @@
 .nb-twisty svg { transition: transform var(--notes-duration-fast) var(--notes-ease); }
 .nb-twisty[aria-expanded='true'] svg { transform: rotate(90deg); }
 
-/* Keeps a leaf's name in the same column as its siblings' names. */
-.nb-twisty-spacer { display: inline-block; width: 18px; flex-shrink: 0; }
+/* Sits in the gap the row's padding leaves, so the whole row stays one link
+   target and the disclosure is still its own button. */
+.nb-row .nb-twisty {
+  position: absolute;
+  left: calc(var(--notes-space-2) + var(--nb-level, 0) * var(--notes-space-4));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+}
 
 .nb-row__name { display: flex; align-items: center; gap: var(--notes-space-2); flex: 1; min-width: 0; }
 .nb-row__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
