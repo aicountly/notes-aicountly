@@ -173,6 +173,11 @@ final class AttachmentService
         ],
     ];
 
+    /** What {@see driveDisposition()} answers. */
+    public const DRIVE_LEAVE_ALONE = 'leave_alone';
+    public const DRIVE_UNLINK_ONLY = 'unlink';
+    public const DRIVE_UNLINK_AND_TRASH = 'unlink_and_trash';
+
     private const COLUMNS = 'id, note_id, block_id, storage_provider, storage_key, drive_file_id,
         filename, mime_type, byte_size, checksum_sha256, kind, duration_seconds, width, height,
         thumbnail_key, upload_status, processing_status, processing_error, extracted_text,
@@ -541,21 +546,35 @@ final class AttachmentService
                 ]);
             }
 
-            // The document survives either way — a linked file is the user's
-            // own, and an uploaded one outlives this row until the purge job
-            // reaches it — but the cross-reference saying this note points at
-            // it should not: Drive's document manager would otherwise keep
-            // showing a note that no longer has the file.
+            // Drive is tidied here, in the request, and not by a job. This is
+            // the one moment the caller's ses_key exists, and every Drive call
+            // is made as the person who asked (see {@see DriveContext}); a
+            // queued job has no session and could only fail.
             //
-            // Both Drive cases, not just the linked one. The row a purge would
-            // eventually cascade away is precisely the one this API creates at
-            // finalize (§29 step 6), and that purge cannot run for a Drive
-            // object today — it has no session — so leaving the link to it
-            // would leave it forever. Drive addresses a document by the same id
-            // in both cases; `drive_file_id` only says whose file it is.
+            // Two different things happen, because there are two kinds of Drive
+            // attachment and only one of them is Notes' to remove:
+            //
+            //   - **The cross-reference goes in both cases.** Drive's document
+            //     manager would otherwise keep showing a note that no longer
+            //     has the file.
+            //   - **A document Notes uploaded is trashed.** It existed only as
+            //     this note's attachment, so leaving it would leave bytes in
+            //     the user's Drive that nothing points at and nothing in Notes
+            //     can reach. Trashed rather than deleted: Drive's own restore
+            //     puts it back, and its retention policy still gets a veto.
+            //     A file the user *linked* from their own Drive is untouched —
+            //     detaching it from a note is not a request to throw it away.
+            //
+            // Drive addresses a document by the same id in both cases;
+            // `drive_file_id` only says whose file it is.
             $documentId = (string) ($attachment['drive_file_id'] ?? $attachment['storage_key']);
-            if ((string) $attachment['storage_provider'] === 'drive' && $documentId !== '' && $sesKey !== '') {
+            $disposition = self::driveDisposition($attachment, $sesKey);
+            if ($disposition !== self::DRIVE_LEAVE_ALONE) {
                 $this->unlinkFromDrive($sesKey, $note, $documentId);
+
+                if ($disposition === self::DRIVE_UNLINK_AND_TRASH) {
+                    $this->trashInDrive($sesKey, $note, $documentId);
+                }
             }
 
             $this->activity->record($identity, ActivityRecorder::ATTACHMENT_REMOVED, $noteId, null, [
@@ -579,6 +598,56 @@ final class AttachmentService
      *
      * Skipped entirely when Drive is switched off, which is the default.
      */
+    /**
+     * What detaching this attachment should do in Drive.
+     *
+     * Its own method because the distinction is the whole of the policy and is
+     * worth being able to state — and test — without a network: a file Notes
+     * uploaded is Notes' to put in the trash, a file the user linked from
+     * their own Drive is not, and an attachment that is not in Drive at all is
+     * neither. Without the caller's session nothing can be done as anybody, so
+     * nothing is attempted.
+     *
+     * @param array<string, mixed> $attachment
+     */
+    public static function driveDisposition(array $attachment, string $sesKey): string
+    {
+        $documentId = (string) ($attachment['drive_file_id'] ?? $attachment['storage_key'] ?? '');
+
+        if ((string) ($attachment['storage_provider'] ?? '') !== 'drive'
+            || $documentId === ''
+            || $sesKey === '') {
+            return self::DRIVE_LEAVE_ALONE;
+        }
+
+        // A linked file is the user's own: the cross-reference goes, the file
+        // stays. `drive_file_id` is what says which of the two this is.
+        return ($attachment['drive_file_id'] ?? null) === null
+            ? self::DRIVE_UNLINK_AND_TRASH
+            : self::DRIVE_UNLINK_ONLY;
+    }
+
+    /**
+     * Send a document Notes uploaded to Drive's trash.
+     *
+     * Same shape and the same reasoning as {@see unlinkFromDrive()}: quiet,
+     * best-effort, and skipped entirely when Drive is switched off. A failure
+     * leaves the file in Drive — which is where it was a moment ago — rather
+     * than refusing a detach the user asked for.
+     */
+    /** @param array<string, mixed> $note */
+    private function trashInDrive(string $sesKey, array $note, string $documentId): void
+    {
+        try {
+            $context = $this->driveContext($sesKey, $note);
+            if ($context !== null) {
+                (new DriveDocumentService())->trash($context, $documentId);
+            }
+        } catch (\Throwable $e) {
+            Logger::warn('drive.trash_skipped', ['error' => get_debug_type($e)]);
+        }
+    }
+
     /** @param array<string, mixed> $note */
     private function unlinkFromDrive(string $sesKey, array $note, string $documentId): void
     {

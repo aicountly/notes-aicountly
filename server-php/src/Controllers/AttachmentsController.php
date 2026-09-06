@@ -6,6 +6,7 @@ namespace Aicountly\Api\Controllers;
 
 use Aicountly\Api\Auth\Identity;
 use Aicountly\Api\Domain\Attachments\AttachmentService;
+use Aicountly\Api\Env;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Http\RateLimiter;
 use Aicountly\Api\Http\Request;
@@ -142,7 +143,32 @@ final class AttachmentsController
             throw ApiException::notFound('That file');
         }
 
-        $signed = $store->signedUrl($key, self::SIGNED_URL_TTL_SECONDS);
+        // A redirect is only usable if the browser is allowed to follow it.
+        //
+        // The SPA fetches this endpoint rather than navigating to it, because
+        // the endpoint needs a Bearer token — and a `fetch` that follows a
+        // redirect to another origin is subject to that origin's CORS rules.
+        // Drive's private bucket lists exactly one origin
+        // (`drive-react-app/server-php/scripts/cors-prod.json`:
+        // `https://drive.aicountly.com`), and Notes is not it. So a 302 to S3
+        // is not an optimisation here, it is a file that will not open:
+        // "Failed to fetch", no status, nothing in the network tab but a
+        // cancelled request.
+        //
+        // Notes therefore serves the bytes itself by default. Drive's own
+        // README gives the same advice for the upload direction — "prefer a
+        // server-side S3 PUT from the product API when the product origin is
+        // not on the Drive S3 CORS allowlist" — and a download is the same
+        // problem pointing the other way.
+        //
+        // An operator who has added this deployment's origin to the bucket's
+        // allowlist (docs/S3_CORS.md in drive-react-app says how) can turn the
+        // redirect back on and keep the megabytes out of PHP. Off by default,
+        // because the default has to be the one that works.
+        $signed = strtolower(Env::get('NOTES_DRIVE_DIRECT_DOWNLOAD', 'false')) === 'true'
+            ? $store->signedUrl($key, self::SIGNED_URL_TTL_SECONDS)
+            : null;
+
         if ($signed !== null) {
             // The store can serve the file itself. The check above is still
             // what issued the link, and it expires in two minutes.

@@ -29,14 +29,22 @@ use Aicountly\Api\Support\Logger;
  *      it, copies quarantine → private, deletes the quarantine copy and inserts
  *      its `documents` row. Only now does a document id exist.
  *
- * ## Why the abort matters
+ * ## Why the abort matters, and where it stops
  *
- * Between step 1 and step 4 there is a session and, usually, an object sitting
+ * Between step 1 and step 3 there is a session and, usually, an object sitting
  * in quarantine. A failure that just throws leaves both behind until Drive's
- * lifecycle cron notices. So every failure after step 1 aborts the session,
+ * lifecycle cron notices. So a failure in steps 2 or 3 aborts the session,
  * which deletes the quarantine object immediately. The abort is best-effort and
  * never replaces the original error: if Drive cannot even be told to abort, the
  * caller still needs to hear why the upload failed.
+ *
+ * **Step 4 is not covered by it, on purpose.** Drive's `abortUpload()` deletes
+ * whatever `storage_objects.object_key` names and never checks the session's
+ * status, and finalize rewrites that same row to the promoted file — so an
+ * abort after a finalize that actually succeeded deletes the user's file and
+ * leaves a `documents` row pointing at nothing. Since a lost answer is
+ * indistinguishable from a refusal here, step 4 never aborts. See the comment
+ * on that call.
  *
  * ## What is sent, and why
  *
@@ -114,7 +122,37 @@ final class DriveDocumentService
                 null,
                 $context->companyParams(),
             );
+        } catch (\Throwable $e) {
+            // Safe to abort: nothing has been promoted yet, so the only thing
+            // to delete is the quarantine copy.
+            $this->abort($context, $sessionId);
 
+            throw $e;
+        }
+
+        try {
+            // Step 4, deliberately OUTSIDE the abort guard.
+            //
+            // Abort is destructive after this point, and not in a way Drive
+            // protects against. `DocumentService::abortUpload()` deletes
+            // whatever `storage_objects.object_key` currently names and does
+            // not look at the session's status — and finalize has by then
+            // rewritten that same row to the private bucket and the final key.
+            // So aborting a session Drive has already finalized deletes the
+            // **promoted file**, leaving a `documents` row pointing at nothing.
+            //
+            // And this API cannot tell a finalize that failed from one that
+            // succeeded with the answer lost. A timeout says nothing. Drive
+            // returns 500 from work that runs *after* its commit — the storage
+            // audit log, then re-reading the document — so even a definite 5xx
+            // can carry a document that exists. There is no
+            // `GET /upload-sessions/{id}` to ask.
+            //
+            // So it is never aborted here. The cost of not aborting a finalize
+            // that genuinely failed is a quarantine object left for Drive's
+            // lifecycle cron, which is exactly what Drive's own failure path
+            // arranges (it sets `quarantine_purge_at` and moves on). The cost
+            // of aborting one that succeeded is the user's file.
             $document = $this->client->send(
                 'POST',
                 self::SESSIONS . '/' . AicountlyClient::segment($sessionId) . '/finalize',
@@ -130,7 +168,14 @@ final class DriveDocumentService
                 $context->companyParams(),
             );
         } catch (\Throwable $e) {
-            $this->abort($context, $sessionId);
+            // Logged with the session id because this is the one failure a
+            // person may have to reconcile by hand: the document may exist in
+            // Drive with no attachment row in Notes pointing at it.
+            Logger::warn('drive.finalize_failed', [
+                'session_id' => $sessionId,
+                'note_id' => $context->noteId,
+                'error' => get_debug_type($e),
+            ]);
 
             throw $e;
         }
@@ -220,6 +265,44 @@ final class DriveDocumentService
             }
         } catch (\Throwable $e) {
             Logger::warn('drive.unlink_failed', [
+                'document_id' => $documentId,
+                'error' => get_debug_type($e),
+            ]);
+        }
+    }
+
+    /**
+     * Put a document Notes created into Drive's trash.
+     *
+     * Detaching an attachment should not leave its bytes in Drive for ever
+     * with nothing pointing at them — the user removed the file, and the only
+     * reason it existed was this note. But `DELETE /documents/{id}` is
+     * permanent, and a note is not the only lens on a document: the person may
+     * have filed, shared or tagged it in Drive since. `POST /documents/{id}/trash`
+     * is the honest middle — it leaves their document list, Drive's own
+     * restore puts it back, and Drive's retention policy still gets a veto
+     * (`RetentionPolicyService::assertCanTrash`).
+     *
+     * Only ever for a document **Notes uploaded**. A file the user linked from
+     * their own Drive is theirs; detaching it from a note is not a request to
+     * throw it away.
+     *
+     * Best-effort, like the unlink beside it: the attachment is already gone
+     * from the note by the time this runs, and Drive being unreachable is not
+     * a reason to refuse a detach the user asked for.
+     */
+    public function trash(DriveContext $context, string $documentId): void
+    {
+        try {
+            $this->client->send(
+                'POST',
+                self::DOCUMENTS . '/' . AicountlyClient::segment($documentId) . '/trash',
+                $context->sesKey,
+                null,
+                $context->companyParams(),
+            );
+        } catch (\Throwable $e) {
+            Logger::warn('drive.trash_failed', [
                 'document_id' => $documentId,
                 'error' => get_debug_type($e),
             ]);

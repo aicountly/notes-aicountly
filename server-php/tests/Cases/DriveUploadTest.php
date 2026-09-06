@@ -254,24 +254,40 @@ final class DriveUploadTest extends TestCase
         });
     }
 
-    public function testAFailedFinalizeAbortsTheSessionToo(): void
+    /**
+     * The upload that must never be "cleaned up".
+     *
+     * Drive's `abortUpload()` deletes whatever `storage_objects.object_key`
+     * names, without looking at the session's status — and finalize has by
+     * then rewritten that row to the promoted file. So an abort sent after a
+     * finalize that actually worked deletes the user's file and leaves a
+     * document row pointing at nothing.
+     *
+     * A refusal and a lost answer are indistinguishable from here (Drive even
+     * returns 500 from work that runs after its own commit), so the rule is
+     * flat: once finalize has been attempted, nothing is aborted.
+     */
+    public function testAFailedFinalizeIsNeverAborted(): void
     {
         $this->withDrive(function (): void {
             $transport = new RecordingTransport([
                 RecordingTransport::json(201, ['session_id' => 77, 'upload_url' => self::UPLOAD_URL]),
                 RecordingTransport::raw(200, ''),
                 RecordingTransport::json(200, ['status' => 'uploaded']),
-                // Drive's own checksum disagreed with the one that was sent.
-                RecordingTransport::raw(400, '{"success":false,"error":"UPLOAD_FINALIZE_FAILED"}'),
-                RecordingTransport::json(200, ['status' => 'aborted']),
+                // Drive's answer never arrives. The document may exist.
+                RecordingTransport::raw(500, ''),
             ]);
 
             $this->assertThrows('UPSTREAM_UNAVAILABLE', static function () use ($transport): void {
                 self::store($transport)->put('', 'bytes', 'image/png', 'x.png');
             });
 
-            $this->assertCount(5, $transport->calls);
-            $this->assertContainsString('/upload-sessions/77/abort', $transport->calls[4]['url']);
+            $urls = array_column($transport->calls, 'url');
+            $this->assertCount(4, $urls, 'four calls: session, PUT, complete, finalize — and no fifth');
+            $this->assertFalse(
+                str_contains(implode(' ', $urls), '/abort'),
+                'a quarantine object left for the lifecycle cron is recoverable; a deleted file is not',
+            );
         });
     }
 
@@ -289,6 +305,51 @@ final class DriveUploadTest extends TestCase
             $this->assertThrows('UPSTREAM_UNAVAILABLE', static function () use ($transport): void {
                 self::store($transport)->put('', 'bytes', 'image/png', 'x.png');
             });
+        });
+    }
+
+    // -- Detaching ----------------------------------------------------------
+
+    /**
+     * Trash, not delete, and on Drive's own route.
+     *
+     * `POST /api/documents/{id}/trash` is recoverable — Drive's own restore
+     * puts the document back and its retention policy still gets a veto —
+     * which is the right weight for "the user took this file off a note".
+     * `DELETE /api/documents/{id}` is permanent and is not used here.
+     */
+    public function testTrashingUsesDrivesRecoverableRouteAndNotThePermanentOne(): void
+    {
+        $this->withDrive(function (): void {
+            $transport = new RecordingTransport([
+                RecordingTransport::json(200, ['id' => 4821, 'status' => 'trashed']),
+            ]);
+
+            (new DriveDocumentService(new AicountlyClient('drive', Features::DRIVE, 'drive', $transport)))
+                ->trash(DriveContext::forNote(self::SES_KEY, self::NOTE_ID, null), 'DOC04821');
+
+            $this->assertCount(1, $transport->calls);
+            $this->assertSame('POST', $transport->calls[0]['method']);
+            $this->assertContainsString('/api/documents/DOC04821/trash', $transport->calls[0]['url']);
+        });
+    }
+
+    /**
+     * A Drive that cannot be reached does not undo the detach.
+     *
+     * The attachment row is already gone by the time this runs. Raising here
+     * would turn "Drive is down" into "you cannot remove this file from your
+     * note", which is not a trade the user would choose.
+     */
+    public function testAFailedTrashIsSwallowedRatherThanFailingTheDetach(): void
+    {
+        $this->withDrive(function (): void {
+            $transport = new RecordingTransport([RecordingTransport::raw(500, '')]);
+
+            (new DriveDocumentService(new AicountlyClient('drive', Features::DRIVE, 'drive', $transport)))
+                ->trash(DriveContext::forNote(self::SES_KEY, self::NOTE_ID, null), 'DOC04821');
+
+            $this->pass();
         });
     }
 

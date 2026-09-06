@@ -365,21 +365,33 @@ Bytes are never served from a guessable URL. `GET
 `X-Content-Type-Options: nosniff`. Uploaded HTML is never rendered as trusted
 content.
 
-That is the **local** store's path, and it is unchanged. A Drive-stored file does
-not stream through PHP at all: after the same permission check, the endpoint asks
-Drive for a short-lived presigned GET (`GET /api/documents/{id}/download`, which
-Drive issues only after running its own authorization ladder — session,
-environment, tenant context, owner, ACL, scope, object-key root — and which
-answers `{url, expires_in, filename, mime_type}`) and returns `302` with that
-URL. The file is authorised twice — here against the note, there against the
-document — and megabytes never cross this process.
+That is the **local** store's path, and it is unchanged. A Drive-stored file
+takes the same route by default, and the reason is CORS rather than anything
+about Drive's API.
 
-Redirecting rather than proxying is the point. Proxying would cost the whole file
-in transfer twice and hold a PHP worker for its duration, and would buy nothing:
-both permission checks have already happened, the URL names one object, and it
-expires in minutes (Drive's default TTL is 300 seconds). `LocalObjectStore::signedUrl()`
-still answers `null`, because its directory is denied to Apache and a link it
-signed would only 403.
+The obvious design is a `302` to the presigned GET Drive issues
+(`GET /api/documents/{id}/download`, which Drive answers only after its own
+authorization ladder — session, environment, tenant context, owner, ACL, scope,
+object-key root — with `{url, expires_in, filename, mime_type}`). It authorises
+the file twice, here against the note and there against the document, and keeps
+megabytes out of this process. **In a browser it does not work.** The endpoint
+needs a Bearer token, so the SPA `fetch`es it rather than navigating to it — and
+a `fetch` that follows a redirect to another origin is subject to *that* origin's
+CORS rules. Drive's private bucket lists exactly one origin
+(`drive-react-app/server-php/scripts/cors-prod.json`:
+`https://drive.aicountly.com`). Notes is not on it, so the redirect ends in
+"Failed to fetch": no status, no error body, nothing to show the user but a file
+that will not open. Drive's own README gives the matching advice for the upload
+direction — *prefer a server-side S3 PUT from the product API when the product
+origin is not on the Drive S3 CORS allowlist* — and a download is the same
+problem pointing the other way.
+
+So Notes serves the bytes itself, because the default has to be the one that
+works. A deployment whose origin **has** been added to the bucket's allowlist
+(`drive-react-app/docs/S3_CORS.md` says how) sets
+`NOTES_DRIVE_DIRECT_DOWNLOAD=true` and gets the redirect, and the saving, back.
+`LocalObjectStore::signedUrl()` still answers `null` either way, because its
+directory is denied to Apache and a link it signed would only 403.
 
 `DriveDocumentService::fetch()` does pull bytes into the process — signed URL,
 then a GET to the object store — for the code that genuinely needs content in
@@ -470,18 +482,24 @@ same as having it.
   gains a way for a product's backend to read an object it owns without an
   end-user session, or Notes derives what it needs from the bytes it already
   holds in memory during the upload request.
-- **Nothing purges a Drive object.** Detaching an attachment soft-deletes the row
-  and, for a **local** file, queues `attachment.object_purge` to remove the bytes.
-  A Drive-stored one is deliberately excluded — `AttachmentService::delete()`
-  queues the job only when `drive_file_id` is null *and* `storage_provider` is
-  not `drive` — because the job runs in the worker through
+- **A Drive object is trashed on detach, not purged — and only when a person is
+  there to do it.** Detaching soft-deletes the attachment row and, for a
+  **local** file, queues `attachment.object_purge` to remove the bytes. A
+  Drive-stored one cannot go through that job: it runs in the worker through
   `storeFor($attachment)`, which has no session behind it, and `DriveObjectStore`
-  rightly refuses rather than inventing a caller. Queued anyway it could only
+  rightly refuses rather than inventing a caller — queued anyway it could only
   fail, retry with backoff and settle as a permanent failure, on every deletion,
-  for ever. So the row goes and the document stays until someone removes it in
-  Drive. Same root cause as the point above, and the same decision closes both.
-  What *is* dropped is the `document_links` row, so at least nothing in Drive
-  goes on claiming the note still has the file.
+  for ever. So the work happens **in the request**, where the caller's ses_key
+  exists: the `document_links` row is dropped, and a document *Notes uploaded*
+  is sent to Drive's trash with `POST /api/documents/{id}/trash`
+  (`AttachmentService::driveDisposition()` decides which of the two it is).
+  Trash and not `DELETE`: Drive's own restore puts it back, and its retention
+  policy still gets a veto. A file the user **linked** from their own Drive is
+  never trashed — detaching it from a note is not a request to throw it away.
+  What remains open is the path with no request behind it: a note purged from
+  Trash by the retention job takes its attachment rows with it and leaves the
+  Drive documents where they are. Same root cause as the point above, and the
+  same decision closes both.
 - **Drive's delete cannot say *why* it refused.** `DELETE /api/documents/{id}`
   answers `DELETE_FAILED` with HTTP 403 for every failure alike — a document
   that is not visible to the caller, one on legal hold, one still inside its

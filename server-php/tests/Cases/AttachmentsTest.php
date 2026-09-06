@@ -7,6 +7,7 @@ namespace Aicountly\Api\Tests\Cases;
 use Aicountly\Api\Auth\Identity;
 use Aicountly\Api\Controllers\AttachmentsController;
 use Aicountly\Api\Database\Connection;
+use Aicountly\Api\Domain\Attachments\AttachmentService;
 use Aicountly\Api\Http\Request;
 use Aicountly\Api\Http\Response;
 use Aicountly\Api\Support\Uuid;
@@ -569,6 +570,49 @@ final class AttachmentsTest extends TestCase
 
         // Detached all the same: the note stops showing the file either way.
         $this->assertCount(0, $this->alice->get('/notes/' . $note['id'] . '/attachments')['body']['data']);
+    }
+
+    /**
+     * Which Drive file detaching may throw away, and which it may not.
+     *
+     * The distinction is the whole of the policy: a document Notes uploaded
+     * existed only as this note's attachment, so it goes to Drive's trash — a
+     * recoverable place, not a permanent delete. A file the user linked from
+     * their own Drive is theirs, and taking it off a note is not a request to
+     * throw it away. Neither is attempted without the caller's session, since
+     * every Drive call is made as the person who asked.
+     */
+    public function testOnlyAFileNotesUploadedIsTrashedWhenItIsDetached(): void
+    {
+        $uploaded = ['storage_provider' => 'drive', 'storage_key' => 'DOC04821', 'drive_file_id' => null];
+        $linked = ['storage_provider' => 'drive', 'storage_key' => 'DOC04821', 'drive_file_id' => 'DOC04821'];
+        $local = ['storage_provider' => 'local', 'storage_key' => 'ab/cd/ef', 'drive_file_id' => null];
+
+        $this->assertSame(
+            AttachmentService::DRIVE_UNLINK_AND_TRASH,
+            AttachmentService::driveDisposition($uploaded, 'ses-key'),
+        );
+        $this->assertSame(
+            AttachmentService::DRIVE_UNLINK_ONLY,
+            AttachmentService::driveDisposition($linked, 'ses-key'),
+        );
+        $this->assertSame(
+            AttachmentService::DRIVE_LEAVE_ALONE,
+            AttachmentService::driveDisposition($local, 'ses-key'),
+        );
+        // No session, nothing to act as.
+        $this->assertSame(
+            AttachmentService::DRIVE_LEAVE_ALONE,
+            AttachmentService::driveDisposition($uploaded, ''),
+        );
+        // A row whose object a purge already cleared names nothing to trash.
+        $this->assertSame(
+            AttachmentService::DRIVE_LEAVE_ALONE,
+            AttachmentService::driveDisposition(
+                ['storage_provider' => 'drive', 'storage_key' => '', 'drive_file_id' => null],
+                'ses-key',
+            ),
+        );
     }
 
     /**
