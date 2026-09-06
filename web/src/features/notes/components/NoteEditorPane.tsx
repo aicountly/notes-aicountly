@@ -11,14 +11,32 @@
  * replaced with the real one. The note exists before the network answers.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { Icon } from '../../../shared/ui/Icon'
 import { Badge, Button, EmptyState, Skeleton } from '../../../shared/ui/primitives'
 import { useAppConfig } from '../../../app/AppConfigProvider'
 import { useImageUploader } from '../../attachments/hooks/useAttachments'
-import { NoteEditor } from '../../editor/NoteEditor'
+
+/**
+ * The editor arrives after the list, not before it.
+ *
+ * Tiptap, ProseMirror and every extension are the heaviest thing the app
+ * loads, and this pane is mounted on every list route — including the ones
+ * where nothing is open and the pane renders an empty state. Importing the
+ * editor eagerly put all of that in front of the first paint of a screen that
+ * shows note cards.
+ *
+ * Deferring it alone would only move the wait to the first note the user
+ * opens, so the chunk is also fetched on idle as soon as the pane mounts: the
+ * cost lands in the gap between "the list appeared" and "the user picked
+ * something", where there is nothing else to do. If they beat the prefetch,
+ * {@link EditorSkeleton} covers the difference — the same skeleton a note that
+ * is still loading shows, so the transition looks like one wait, not two.
+ */
+const loadEditor = () => import('../../editor/NoteEditor')
+const NoteEditor = lazy(() => loadEditor().then((module) => ({ default: module.NoteEditor })))
 import { useCreateNote, useNote, useNoteFlag } from '../hooks/useNotes'
 import { NoteInfoPanel } from './NoteInfoPanel'
 import { NoteMenu, daysUntilPurge } from './NoteCard'
@@ -71,6 +89,21 @@ export function NoteEditorPane({
 
   // A refusal belongs to the note it was about; opening another one clears it.
   useEffect(() => setFlagError(null), [noteId])
+
+  // Warm the editor chunk while the browser has nothing better to do. Idle
+  // rather than immediate: the list this pane sits beside is still fetching
+  // and rendering, and competing with it would trade one wait for another.
+  useEffect(() => {
+    const start = () => void loadEditor()
+
+    if (typeof window.requestIdleCallback === 'function') {
+      const handle = window.requestIdleCallback(start, { timeout: 3_000 })
+      return () => window.cancelIdleCallback(handle)
+    }
+
+    const handle = window.setTimeout(start, 400)
+    return () => window.clearTimeout(handle)
+  }, [])
 
   // One create per visit to /new, even though StrictMode runs effects twice
   // and this effect's dependencies are not referentially stable.
@@ -290,7 +323,9 @@ export function NoteEditorPane({
 
       <div className="editor__pane-body">
         <div className="editor__pane-main">
-          <NoteEditor note={open} uploadImage={uploadImage} />
+          <Suspense fallback={<EditorSkeleton />}>
+            <NoteEditor note={open} uploadImage={uploadImage} />
+          </Suspense>
         </div>
 
         {infoOpen ? <NoteInfoPanel note={open} onClose={() => setInfoOpen(false)} /> : null}
