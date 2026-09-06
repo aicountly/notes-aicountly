@@ -13,7 +13,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { VersionHistoryDrawer, previewBlocks } from './VersionHistoryDrawer'
-import type { Note, NoteCapabilities, NoteRevision } from '../../../shared/api/types'
+import type { Note, NoteCapabilities, NoteRevision, NoteRevisionDetail } from '../../../shared/api/types'
 
 vi.mock('../../../auth/portal', () => ({ ensureSesKey: async () => 'test-session-key' }))
 
@@ -91,7 +91,7 @@ const REVISIONS: NoteRevision[] = [
   },
 ]
 
-const REVISION_DETAIL = {
+const REVISION_DETAIL: NoteRevisionDetail = {
   id: 'rev-2',
   revision_number: 2,
   title: 'Quarterly review',

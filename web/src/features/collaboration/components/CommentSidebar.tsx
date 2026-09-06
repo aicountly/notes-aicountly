@@ -416,13 +416,18 @@ function Composer({
   const text = value ?? internal
   const setText = onChange ?? setInternal
 
+  // Never cleared here. A failed post keeps what was typed; a successful one
+  // is cleared by the caller, which is the only side that knows it succeeded.
+  const submit = () => {
+    if (text.trim() !== '' && !pending) onSubmit(text)
+  }
+
   return (
     <form
       className={className}
       onSubmit={(event) => {
         event.preventDefault()
-        onSubmit(text)
-        if (onChange === undefined) setInternal('')
+        submit()
       }}
     >
       <label className="org-label" htmlFor={fieldId}>
@@ -441,8 +446,7 @@ function Composer({
           // The shortcut people expect from every other comment box.
           if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
             event.preventDefault()
-            onSubmit(text)
-            if (onChange === undefined) setInternal('')
+            submit()
           }
         }}
       />
