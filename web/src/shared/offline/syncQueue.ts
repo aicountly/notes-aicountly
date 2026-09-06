@@ -84,12 +84,31 @@ export const syncQueue = {
     // Successive edits to one note collapse into the latest: replaying forty
     // autosaves of the same paragraph achieves nothing the last one does not,
     // and it turns a reconnect into a stampede.
+    //
+    // Collapsed by MERGING the payloads, not by replacing them. A note update
+    // is a patch — `PATCH /notes/{id}` with whatever changed — so two queued
+    // updates are usually about different fields. Overwriting the first with
+    // the second is silent data loss in the plainest form: write a paragraph
+    // offline (`{document, version}`), rename the note (`{title}`), and the
+    // paragraph never existed. Later fields win, earlier ones survive.
     let inheritedSeq: number | null = null
+    let merged = payload
     if (operation === 'note.update') {
       const superseded = pending.find(
         (op) => op.entity_id === entityId && op.operation === 'note.update',
       )
       if (superseded) {
+        merged = { ...superseded.payload, ...payload }
+
+        // `version` is the exception to "later wins". It is not a value the
+        // user edited; it says which server revision this device's content is
+        // based on, and that is the revision the FIRST unsent edit diverged
+        // from. Keeping the older number is what makes the server refuse the
+        // merged patch — correctly — if the note moved on in the meantime.
+        if (typeof superseded.payload.version === 'number') {
+          merged.version = superseded.payload.version
+        }
+
         // Keep the original position. Moving the merged edit to the back of the
         // queue would let a later operation on the same note overtake it.
         inheritedSeq = superseded.seq
@@ -102,7 +121,7 @@ export const syncQueue = {
       entity_type: entityType,
       entity_id: entityId,
       operation,
-      payload,
+      payload: merged,
       client_stamp: new Date().toISOString(),
       created_at: Date.now(),
       seq: inheritedSeq ?? (await takeSeq()),

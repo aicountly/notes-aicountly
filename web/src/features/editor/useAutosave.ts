@@ -85,6 +85,44 @@ function readConflict(error: ApiError): AutosaveConflict {
   }
 }
 
+/**
+ * Drafts that could not be sent, parked by note id.
+ *
+ * A conflict stops the loop and keeps what was typed — that is the promise the
+ * banner makes, in those words. But the draft lives in a ref inside this hook,
+ * and opening another note clears it, because carrying it forward would write
+ * one note's words into another. Between those two correct rules the user's
+ * paragraph fell on the floor: hit a conflict, click a different note to check
+ * something, come back, and it is gone with no error and nothing to undo.
+ *
+ * So a blocked draft is parked here on the way out and restored, with its
+ * conflict, on the way back in. Module scope rather than a ref because the
+ * hook remounts when the pane switches notes; the entry is removed the moment
+ * the conflict is resolved or the note saves, so this holds only drafts that
+ * are genuinely still waiting on the user.
+ */
+interface ParkedDraft {
+  draft: AutosaveDraft
+  conflict: AutosaveConflict | null
+  version: number
+}
+
+const parkedDrafts = new Map<string, ParkedDraft>()
+
+/**
+ * Forget every parked draft.
+ *
+ * These live in memory, keyed by note id, and a note id means nothing outside
+ * the account that owns it. Signing a different person in on the same tab must
+ * therefore drop them, for the same reason the offline queue is cleared then:
+ * an unsent draft carries no identity of its own, and restoring one for
+ * "note-1" under a second user would put the first user's words on a
+ * stranger's note. Tests use it to get a clean module between cases.
+ */
+export function clearParkedDrafts(): void {
+  parkedDrafts.clear()
+}
+
 export function useAutosave({
   noteId,
   version,
@@ -107,6 +145,8 @@ export function useAutosave({
   const versionRef = useRef(version)
   const enabledRef = useRef(enabled)
   const blockedRef = useRef(false)
+  /** The conflict as the cleanup sees it — state is not readable from there. */
+  const conflictRef = useRef<AutosaveConflict | null>(null)
   const inFlightRef = useRef(false)
   const saveAgainRef = useRef(false)
   const idleTimer = useRef<number | null>(null)
@@ -153,6 +193,7 @@ export function useAutosave({
       // The offline path resolves with the locally cached note, which may not
       // carry a version; keeping the old one is right in that case.
       if (typeof saved?.version === 'number') versionRef.current = saved.version
+      parkedDrafts.delete(noteIdRef.current)
 
       setError(null)
       setState('saved')
@@ -167,7 +208,8 @@ export function useAutosave({
 
       if (caught instanceof ApiError && caught.isConflict) {
         blockedRef.current = true
-        setConflict(readConflict(caught))
+        conflictRef.current = readConflict(caught)
+        setConflict(conflictRef.current)
         setState('conflict')
       } else if (caught instanceof ApiError) {
         setError(caught)
@@ -221,10 +263,12 @@ export function useAutosave({
   const resume = useCallback((nextVersion: number, discardDraft = false) => {
     versionRef.current = nextVersion
     blockedRef.current = false
+    parkedDrafts.delete(noteIdRef.current)
     if (discardDraft) {
       draftRef.current = null
       setHasPendingChanges(false)
     }
+    conflictRef.current = null
     setConflict(null)
     setError(null)
     setState(draftRef.current ? 'pending' : 'idle')
@@ -234,23 +278,72 @@ export function useAutosave({
   // the pending draft is still flushed against the note it was typed into.
   useEffect(() => {
     noteIdRef.current = noteId
+    // Set, not raised. `versionRef` says which revision *this note's* editor
+    // content is based on, so it has to follow the note rather than only ever
+    // climb: leaving note A at version 3 for note B at version 40 and coming
+    // back used to send 40 for a note that is on 3, which the server refuses
+    // — a conflict nobody caused, on a note nobody else had touched, with
+    // autosave stopped until the page was reloaded.
+    versionRef.current = version
+    setError(null)
+
+    const parked = parkedDrafts.get(noteId)
+    if (parked) {
+      // Left in conflict, returned to. Restore both halves — the words and the
+      // reason they are not saved — or the banner is gone and the next
+      // keystroke sends a draft the user never re-approved.
+      draftRef.current = parked.draft
+      versionRef.current = parked.version
+      blockedRef.current = true
+      conflictRef.current = parked.conflict
+      setConflict(parked.conflict)
+      setState('conflict')
+      setHasPendingChanges(true)
+      return
+    }
+
     // Whatever the flush above could not send belonged to the previous note;
     // carrying it forward would write one note's words into another.
     draftRef.current = null
     blockedRef.current = false
+    conflictRef.current = null
     setConflict(null)
-    setError(null)
     setState('idle')
     setHasPendingChanges(false)
 
     return () => {
+      // A blocked draft cannot be flushed — that is what blocked means — so it
+      // is parked against the note it was typed into, and picked up again when
+      // the user comes back to decide.
+      if (blockedRef.current && draftRef.current !== null) {
+        parkedDrafts.set(noteIdRef.current, {
+          draft: draftRef.current,
+          conflict: conflictRef.current,
+          version: versionRef.current,
+        })
+      }
       void flush()
     }
-  }, [noteId, flush])
+  }, [noteId, version, flush])
 
-  // A save the server accepted advances the version; so does an edit made in
-  // another tab. Either way the next save must carry the newer number.
+  /**
+   * A newer version arrived from the server.
+   *
+   * Adopted only when this editor has nothing unsent. The number is not a
+   * counter to keep up with: it is the claim "my content is based on revision
+   * N", and the server compares it to decide whether this save is safe. Taking
+   * a version that somebody else's save produced makes that claim false — the
+   * optimistic lock then passes and their paragraph is overwritten by a
+   * document that never contained it, silently, which is the exact failure the
+   * whole version mechanism exists to prevent.
+   *
+   * So when there is a draft in hand, or a save on the wire, the old number is
+   * kept: the next save carries it, the server answers 409, and the user is
+   * shown the conflict instead of winning a race they did not know they were
+   * in.
+   */
   useEffect(() => {
+    if (draftRef.current !== null || inFlightRef.current || blockedRef.current) return
     if (version > versionRef.current) versionRef.current = version
   }, [version])
 

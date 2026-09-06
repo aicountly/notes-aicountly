@@ -7,7 +7,7 @@ import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '../../shared/api/client'
-import { AUTOSAVE_IDLE_MS, AUTOSAVE_MAX_WAIT_MS, useAutosave } from './useAutosave'
+import { AUTOSAVE_IDLE_MS, AUTOSAVE_MAX_WAIT_MS, clearParkedDrafts, useAutosave } from './useAutosave'
 import type { Note } from '../../shared/api/types'
 
 function noteAt(version: number): Note {
@@ -58,6 +58,10 @@ function noteAt(version: number): Note {
 describe('useAutosave', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    // A conflicted draft is parked in module scope so the writer gets it back
+    // when they return to the note. That is the point of it, and it means one
+    // case's unresolved conflict would otherwise be restored into the next.
+    clearParkedDrafts()
   })
 
   it('waits for typing to stop, then saves once with everything typed', async () => {
@@ -171,6 +175,92 @@ describe('useAutosave', () => {
     expect(save).toHaveBeenCalledTimes(2)
     expect(save.mock.calls[1]?.[0]).toMatchObject({ version: 12, title: 'mine' })
     expect(result.current.conflict).toBeNull()
+  })
+
+  it('does not adopt a version produced by somebody else while an edit is unsent', async () => {
+    const save = vi.fn().mockResolvedValue(noteAt(4))
+    const { result, rerender } = renderHook(
+      ({ version }) => useAutosave({ noteId: 'note-1', version, enabled: true, save }),
+      { initialProps: { version: 3 } },
+    )
+
+    act(() => {
+      result.current.schedule({ title: 'my paragraph' })
+    })
+
+    // A collaborator saves. The note query refetches and the version climbs —
+    // but this editor's content is still based on 3, and saying otherwise
+    // would let the optimistic lock pass and overwrite what they wrote.
+    rerender({ version: 9 })
+
+    await act(async () => {
+      await result.current.flush()
+    })
+
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ version: 3, title: 'my paragraph' })
+  })
+
+  it('adopts a newer version when there is nothing unsent to protect', async () => {
+    const save = vi.fn().mockResolvedValue(noteAt(10))
+    const { result, rerender } = renderHook(
+      ({ version }) => useAutosave({ noteId: 'note-1', version, enabled: true, save }),
+      { initialProps: { version: 3 } },
+    )
+
+    rerender({ version: 9 })
+
+    await act(async () => {
+      result.current.schedule({ title: 'typed after the refresh' })
+      await result.current.flush()
+    })
+
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ version: 9 })
+  })
+
+  it('follows the version down when a different note is opened', async () => {
+    const save = vi.fn().mockResolvedValue(noteAt(41))
+    const { result, rerender } = renderHook(
+      ({ noteId, version }) => useAutosave({ noteId, version, enabled: true, save }),
+      { initialProps: { noteId: 'busy-note', version: 40 } },
+    )
+
+    // Back to a quiet note on version 3. Sending 40 for it is a conflict
+    // nobody caused, on a note nobody else had touched.
+    rerender({ noteId: 'quiet-note', version: 3 })
+
+    await act(async () => {
+      result.current.schedule({ title: 'a small edit' })
+      await result.current.flush()
+    })
+
+    expect(save.mock.calls[0]?.[0]).toMatchObject({ id: 'quiet-note', version: 3 })
+  })
+
+  it('gives a conflicted draft back when the writer returns to the note', async () => {
+    const conflict = new ApiError('VERSION_CONFLICT', 'Changed somewhere else.', 409, {
+      server_version: 12,
+    })
+    const save = vi.fn().mockRejectedValue(conflict)
+    const { result, rerender } = renderHook(
+      ({ noteId, version }) => useAutosave({ noteId, version, enabled: true, save }),
+      { initialProps: { noteId: 'note-1', version: 3 } },
+    )
+
+    await act(async () => {
+      result.current.schedule({ title: 'words worth keeping' })
+      vi.advanceTimersByTime(AUTOSAVE_IDLE_MS)
+    })
+    expect(result.current.state).toBe('conflict')
+
+    // Off to check something on another note, and back again. The banner
+    // promises the changes are kept until the writer chooses; leaving and
+    // returning is not choosing.
+    rerender({ noteId: 'note-2', version: 1 })
+    rerender({ noteId: 'note-1', version: 3 })
+
+    expect(result.current.state).toBe('conflict')
+    expect(result.current.hasPendingChanges).toBe(true)
+    expect(result.current.conflict?.serverVersion).toBe(12)
   })
 
   it('never saves a note the reader may not edit', async () => {

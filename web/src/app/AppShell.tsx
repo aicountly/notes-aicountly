@@ -23,6 +23,7 @@ import { ConflictBanner } from '../features/notes/components/ConflictBanner'
 import { useKeyboardShortcuts } from '../shared/hooks/useKeyboardShortcuts'
 import { startSyncEngine } from '../shared/offline/syncEngine'
 import { localNoteStore } from '../shared/offline/localNoteStore'
+import { clearParkedDrafts } from '../features/editor/useAutosave'
 import { useAuth } from '../auth/AuthProvider'
 
 export function AppShell() {
@@ -34,9 +35,14 @@ export function AppShell() {
 
   useEffect(() => startSyncEngine(), [])
 
-  // Clear another user's cached notes before anything reads them.
+  // Clear another user's offline state before anything reads it — the cached
+  // notes and unsent queue on the device, and the conflicted drafts the editor
+  // parks in memory. All three are keyed by note id, which means nothing
+  // outside the account that owns it.
   useEffect(() => {
-    if (profile?.user_id) void localNoteStore.ensureOwner(profile.user_id)
+    if (!profile?.user_id) return
+    clearParkedDrafts()
+    void localNoteStore.ensureOwner(profile.user_id)
   }, [profile?.user_id])
 
   // Navigating closes the mobile drawer; leaving it open would cover the page

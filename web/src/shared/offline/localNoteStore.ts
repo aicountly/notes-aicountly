@@ -13,7 +13,7 @@
  * not reached the server yet.
  */
 
-import { idb, meta, STORE_NOTES } from './db'
+import { idb, meta, STORE_NOTES, STORE_QUEUE } from './db'
 import type { Note, NoteSummary } from '../api/types'
 
 /**
@@ -111,15 +111,29 @@ export const localNoteStore = {
   },
 
   /**
-   * Drop the cache when a different user signs in on this device.
+   * Drop this device's offline state when a different user signs in.
    *
-   * Without this, one person's notes would be readable offline by the next
-   * person to use the same browser profile.
+   * The cache is the obvious half: without clearing it, one person's notes
+   * would be readable offline by the next person to use the same browser
+   * profile.
+   *
+   * **The queue is the half that matters more.** An unsent operation carries
+   * no identity of its own — the engine drains it with whatever session is
+   * signed in when the network returns. Left behind across a user switch, the
+   * first person's unsent note is created, and their unsent edits are written,
+   * *inside the second person's account*: their words under someone else's
+   * name, and gone from their own. On a shared machine that is the worst
+   * outcome this store can produce, so it is cleared in the same breath as the
+   * notes.
+   *
+   * Clearing rather than draining first is deliberate. Draining would need the
+   * previous user's session, which is exactly what has just gone away.
    */
   async ensureOwner(userId: string): Promise<void> {
     const previous = await meta.get<string>(OWNER_KEY)
     if (previous && previous !== userId) {
       await idb.clear(STORE_NOTES)
+      await idb.clear(STORE_QUEUE)
       await meta.set(SYNC_CURSOR_KEY, '')
     }
     if (previous !== userId) await meta.set(OWNER_KEY, userId)

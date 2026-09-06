@@ -160,6 +160,18 @@ describe('the local note store', () => {
     expect(await localNoteStore.all()).toEqual([])
   })
 
+  it('drops the unsent queue when a different user signs in', async () => {
+    await localNoteStore.ensureOwner('user-a')
+    await syncQueue.enqueue('note.create', 'note', 'n1', { id: 'n1', title: 'A private draft' })
+
+    await localNoteStore.ensureOwner('user-b')
+
+    // An unsent operation carries no identity of its own: the engine sends it
+    // with whatever session is signed in when the network returns. Left here,
+    // the first person's draft is created inside the second person's account.
+    expect(await syncQueue.count()).toBe(0)
+  })
+
   it('leaves the cache alone when the same user returns', async () => {
     await localNoteStore.ensureOwner('user-a')
     await localNoteStore.save(summary('mine'))
@@ -189,6 +201,35 @@ describe('the sync queue', () => {
     // does not, and turns a reconnect into a stampede.
     expect(pending).toHaveLength(1)
     expect(pending[0].payload).toEqual({ title: 'draft 3' })
+  })
+
+  it('merges a collapsed edit rather than replacing it', async () => {
+    // Write a paragraph offline, then rename the note. These are two PATCHes
+    // of different fields, and the second used to overwrite the first whole:
+    // the paragraph was gone with nothing to say it had ever been typed.
+    await syncQueue.enqueue('note.update', 'note', 'n1', {
+      document: { type: 'doc', content: [{ type: 'paragraph' }] },
+      version: 7,
+    })
+    await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'Renamed' })
+
+    const [pending] = await syncQueue.all()
+    expect(pending.payload).toEqual({
+      document: { type: 'doc', content: [{ type: 'paragraph' }] },
+      title: 'Renamed',
+      version: 7,
+    })
+  })
+
+  it('keeps the version the first unsent edit was based on', async () => {
+    await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'first', version: 7 })
+    await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'second', version: 9 })
+
+    // Later fields win — except the version, which is not something the user
+    // typed. It says which server revision this device diverged from, and that
+    // is the older one; sending 9 would tell the server this edit already
+    // accounts for a revision it does not.
+    expect((await syncQueue.all())[0].payload).toEqual({ title: 'second', version: 7 })
   })
 
   it('keeps edits to different notes apart', async () => {
