@@ -463,6 +463,143 @@ final class MeetingsTest extends TestCase
         $this->assertNull($row['edited_text']);
     }
 
+    // -- The external ids a recording is routed by ---------------------------
+
+    /**
+     * Regression: a Connect meeting id belongs to one note.
+     *
+     * `PATCH /notes/{id}/meeting` writes `connect_meeting_id` directly, and an
+     * inbound recording is routed by that column alone — most recently updated
+     * note wins. So before this was enforced on the write path, anyone could
+     * put someone else's meeting id on a note of their own, touch it last, and
+     * be handed the transcript of a call they were never in. The 409 the
+     * integration raised was no defence: the endpoint went around it.
+     */
+    public function testAnotherNoteCannotClaimTheMeetingIdARecordingIsRoutedBy(): void
+    {
+        $alice = $this->note('Board call');
+        $this->alice->patch('/notes/' . $alice['id'] . '/meeting', ['connect_meeting_id' => 'mtg-7']);
+
+        $decoy = $this->bob->post('/notes', [
+            'title' => 'Decoy',
+            'document' => Support::doc('Nothing here.'),
+        ])['body']['data'];
+
+        $claim = $this->bob->patch('/notes/' . $decoy['id'] . '/meeting', ['connect_meeting_id' => 'mtg-7']);
+        $this->assertSame(409, $claim['status']);
+        $this->assertSame('CONNECT_MEETING_ALREADY_LINKED', $claim['body']['error']['code']);
+        // Which note holds it is not Bob's to learn — he cannot see it.
+        $this->assertFalse(
+            isset($claim['body']['error']['details']['note_id']),
+            'a note id Bob cannot open must not be handed to him',
+        );
+
+        // The claim wrote nothing, so the recording still goes where it was asked to.
+        $this->assertNull(
+            Connection::selectOne(
+                'SELECT connect_meeting_id FROM note_meetings WHERE note_id = :id',
+                ['id' => $decoy['id']],
+            )['connect_meeting_id'] ?? null,
+        );
+
+        putenv('NOTES_CONNECT_ENABLED=true');
+        try {
+            $transcript = (new ConnectIntegrationService())->ingestRecording([
+                'connect_meeting_id' => 'mtg-7',
+                'transcript' => ['text' => 'The acquisition price is 4.2 crore.'],
+            ]);
+            $this->assertSame($alice['id'], $transcript['note_id'], 'the recording belongs to the note that asked');
+        } finally {
+            putenv('NOTES_CONNECT_ENABLED=false');
+        }
+
+        $this->assertCount(0, $this->bob->get('/notes/' . $decoy['id'] . '/transcripts')['body']['data']);
+        $this->assertContainsString(
+            '4.2 crore',
+            $this->alice->get('/notes/' . $alice['id'] . '/transcripts')['body']['data'][0]['text'],
+        );
+    }
+
+    public function testANoteMayKeepItsOwnExternalIdAndTheOwnerIsToldWhereTheOtherIs(): void
+    {
+        $note = $this->note();
+        $this->alice->patch('/notes/' . $note['id'] . '/meeting', ['calendar_event_id' => 'evt-9']);
+
+        // Re-sending the same id to the same note is not a conflict with itself.
+        $again = $this->alice->patch('/notes/' . $note['id'] . '/meeting', [
+            'calendar_event_id' => 'evt-9',
+            'location' => 'Room 3',
+        ]);
+        $this->assertSame(200, $again['status']);
+        $this->assertSame('evt-9', $again['body']['data']['calendar_event_id']);
+
+        // And when the caller *can* see the other note, saying which one it is
+        // is the useful half of the answer.
+        $other = $this->note('Second set of minutes');
+        $refused = $this->alice->patch('/notes/' . $other['id'] . '/meeting', ['calendar_event_id' => 'evt-9']);
+        $this->assertSame(409, $refused['status']);
+        $this->assertSame('CALENDAR_EVENT_ALREADY_LINKED', $refused['body']['error']['code']);
+        $this->assertSame($note['id'], $refused['body']['error']['details']['note_id'] ?? null);
+    }
+
+    public function testAnExternalIdIsRefusedRatherThanTrimmedToFit(): void
+    {
+        $note = $this->note();
+
+        // A truncated id still points at something — at a different meeting.
+        $refused = $this->alice->patch('/notes/' . $note['id'] . '/meeting', [
+            'calendar_event_id' => str_repeat('e', 129),
+        ]);
+
+        $this->assertSame(422, $refused['status']);
+        $this->assertCount(0, Connection::select('SELECT note_id FROM note_meetings'));
+    }
+
+    // -- Reading a row somebody else wrote ------------------------------------
+
+    /**
+     * Regression: minutes written by Pulse must not make the meeting unreadable.
+     *
+     * `note_meetings.decisions` is written by {@see \Aicountly\Api\Domain\Ai\NotesAIService}
+     * straight from a model's JSON, so a decision can carry an object where a
+     * string belongs. Running the request validator over that on the way out
+     * answered 422 to `GET` — and to every `PATCH`, which left the note with no
+     * way to repair the row that caused it.
+     */
+    public function testMinutesWrittenByPulseStillRender(): void
+    {
+        $note = $this->note();
+
+        Connection::execute(
+            "INSERT INTO note_meetings (note_id, summary, summary_model, summary_at, decisions, participants)
+             VALUES (:note, 'Model minutes', 'gpt-4o-mini', now(), :decisions::jsonb, :participants::jsonb)",
+            [
+                'note' => $note['id'],
+                'decisions' => (string) json_encode([
+                    ['text' => 'Ship in April', 'decided_by' => ['Ravi', 'Anu']],
+                    ['text' => ['nested' => 'thing']],
+                    'Renew the retainer',
+                ]),
+                'participants' => (string) json_encode([['name' => ['R', 'S'], 'email' => 'ravi@acme.test']]),
+            ],
+        );
+
+        $read = $this->alice->get('/notes/' . $note['id'] . '/meeting');
+        $this->assertSame(200, $read['status']);
+        $decisions = $read['body']['data']['decisions'];
+        $this->assertCount(2, $decisions, 'what can be rendered is rendered; the rest is dropped');
+        $this->assertSame('Ship in April', $decisions[0]['text']);
+        $this->assertNull($decisions[0]['decided_by'], 'a list of names is not a name');
+        $this->assertSame('Renew the retainer', $decisions[1]['text']);
+        $this->assertSame('ravi@acme.test', $read['body']['data']['participants'][0]['email']);
+        $this->assertNull($read['body']['data']['participants'][0]['name']);
+
+        // And the note is still editable, which is what makes the row fixable.
+        $patched = $this->alice->patch('/notes/' . $note['id'] . '/meeting', ['location' => 'Room 3']);
+        $this->assertSame(200, $patched['status']);
+        $this->assertSame('Room 3', $patched['body']['data']['location']);
+    }
+
     // -- Integrations, unconfigured -----------------------------------------
 
     public function testTheIntegrationsAnswerFeatureDisabledUntilTheyAreConfigured(): void
