@@ -21,12 +21,18 @@ abstract class TestCase
 
     abstract public function name(): string;
 
-    /** @return array<int, string> Method names to run. */
+    /**
+     * Method names to run.
+     *
+     * `testMethods` itself starts with "test", so without excluding it every
+     * case would report one extra passing test that asserts nothing — and an
+     * inflated count is worse than no count, because it reads as coverage.
+     */
     public function testMethods(): array
     {
         return array_values(array_filter(
             get_class_methods($this),
-            static fn (string $m) => str_starts_with($m, 'test'),
+            static fn (string $m) => str_starts_with($m, 'test') && $m !== 'testMethods',
         ));
     }
 

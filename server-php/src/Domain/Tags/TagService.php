@@ -115,7 +115,13 @@ final class TagService
         $rows = Connection::select(
             'WITH RECURSIVE ' . NoteAccess::cte() . '
              SELECT t.id, t.name, t.slug, t.color,
-                    count(n.id) FILTER (WHERE n.deleted_at IS NULL AND NOT n.is_archived) AS note_count
+                    -- `a.note_id IS NOT NULL` is the access check. Without it a
+                    -- note the caller has since been removed from would keep
+                    -- counting towards their own tag, which is a small but real
+                    -- signal about a note they can no longer open.
+                    count(n.id) FILTER (
+                        WHERE n.deleted_at IS NULL AND NOT n.is_archived AND a.note_id IS NOT NULL
+                    ) AS note_count
              FROM tags t
              LEFT JOIN note_tags nt ON nt.tag_id = t.id
              LEFT JOIN notes n ON n.id = nt.note_id
