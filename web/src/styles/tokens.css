@@ -1,0 +1,244 @@
+/* ---------------------------------------------------------------------------
+ * Aicountly Notes — design tokens.
+ *
+ * Notes is a workspace people sit inside for hours, so it is deliberately
+ * calmer than the rest of AICOUNTLY: warm neutral surfaces, generous space,
+ * and green used as an accent rather than as a background. The brand green
+ * (#25b003) appears on the primary action, on selection, on active navigation
+ * and on progress — not on panels.
+ *
+ * Every colour in the app comes from here. A component that hardcodes a hex
+ * value is a component that breaks in dark mode.
+ *
+ * Three theme states, in this order of precedence:
+ *   [data-theme="dark"]  — the user chose dark
+ *   [data-theme="light"] — the user chose light
+ *   (neither)            — follow the system, via prefers-color-scheme
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* --- Brand ------------------------------------------------------------ */
+  --notes-primary: #25b003;
+  --notes-primary-hover: #1f9503;
+  --notes-primary-active: #197a02;
+  --notes-primary-soft: #eaf7e6;
+  --notes-primary-border: #b9e5ad;
+  --notes-on-primary: #ffffff;
+
+  /* --- Surfaces --------------------------------------------------------- */
+  --notes-bg: #f7f8f7;
+  --notes-surface: #ffffff;
+  --notes-surface-secondary: #f1f3f1;
+  --notes-surface-hover: #ecefec;
+  --notes-surface-raised: #ffffff;
+  --notes-overlay: rgb(24 32 24 / 38%);
+
+  /* --- Text ------------------------------------------------------------- */
+  --notes-text-primary: #182018;
+  --notes-text-secondary: #667066;
+  --notes-text-tertiary: #8b958b;
+  --notes-text-inverse: #ffffff;
+
+  /* --- Lines ------------------------------------------------------------ */
+  --notes-border: #e4e8e4;
+  --notes-border-strong: #d2d8d2;
+  --notes-focus-ring: #25b003;
+
+  /* --- Status ----------------------------------------------------------- */
+  --notes-danger: #c0392b;
+  --notes-danger-soft: #fdeceb;
+  --notes-warning: #b8730a;
+  --notes-warning-soft: #fdf3e3;
+  --notes-info: #1d6fb8;
+  --notes-info-soft: #e9f2fa;
+  --notes-success: var(--notes-primary);
+
+  /* --- Note colours ----------------------------------------------------
+   * Google Keep's idea, in a calmer register: a tint the card takes on so a
+   * wall of notes is scannable. Each has a paired border, because colour
+   * alone must never be the only signal (see the accessibility notes in
+   * docs/ARCHITECTURE.md). */
+  --note-default: var(--notes-surface);
+  --note-default-border: var(--notes-border);
+  --note-coral: #fdeceb;      --note-coral-border: #f5cdc9;
+  --note-peach: #fdf1e3;      --note-peach-border: #f2ddc0;
+  --note-sand: #fbf6e0;       --note-sand-border: #ebe2b8;
+  --note-sage: #eaf4e6;       --note-sage-border: #cbe2c2;
+  --note-mint: #e3f5f0;       --note-mint-border: #bfe4da;
+  --note-sky: #e8f1fb;        --note-sky-border: #c6dcf2;
+  --note-lavender: #f0ecfa;   --note-lavender-border: #d8cff0;
+  --note-blush: #fbeaf3;      --note-blush-border: #f0c9e0;
+  --note-graphite: #eef0ef;   --note-graphite-border: #d6dad7;
+
+  /* --- Shape ------------------------------------------------------------ */
+  --notes-radius-xs: 6px;
+  --notes-radius-sm: 8px;
+  --notes-radius-md: 12px;
+  --notes-radius-lg: 16px;
+  --notes-radius-xl: 22px;
+  --notes-radius-pill: 999px;
+
+  /* --- Elevation -------------------------------------------------------- */
+  --notes-shadow-xs: 0 1px 2px rgb(24 32 24 / 5%);
+  --notes-shadow-sm: 0 1px 3px rgb(24 32 24 / 7%), 0 1px 2px rgb(24 32 24 / 4%);
+  --notes-shadow-md: 0 4px 12px rgb(24 32 24 / 8%), 0 1px 3px rgb(24 32 24 / 5%);
+  --notes-shadow-lg: 0 12px 32px rgb(24 32 24 / 12%), 0 2px 8px rgb(24 32 24 / 6%);
+
+  /* --- Space ------------------------------------------------------------ */
+  --notes-space-1: 4px;
+  --notes-space-2: 8px;
+  --notes-space-3: 12px;
+  --notes-space-4: 16px;
+  --notes-space-5: 20px;
+  --notes-space-6: 24px;
+  --notes-space-8: 32px;
+  --notes-space-10: 40px;
+  --notes-space-12: 48px;
+
+  /* --- Type ------------------------------------------------------------- */
+  --notes-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --notes-font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --notes-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  --notes-text-xs: 11px;
+  --notes-text-sm: 13px;
+  --notes-text-base: 14px;
+  --notes-text-md: 15px;
+  --notes-text-lg: 17px;
+  --notes-text-xl: 20px;
+  --notes-text-2xl: 26px;
+  --notes-text-3xl: 32px;
+
+  /* --- Layout ----------------------------------------------------------- */
+  --notes-sidebar-width: 248px;
+  --notes-list-width: 340px;
+  --notes-header-height: 56px;
+  --notes-editor-measure: 46rem;
+
+  /* --- Motion ----------------------------------------------------------
+   * Short and few. A notes app should feel immediate, and an animation the
+   * user waits through is a slower app that looks busier. */
+  --notes-ease: cubic-bezier(0.2, 0, 0.13, 1);
+  --notes-duration-fast: 90ms;
+  --notes-duration: 150ms;
+
+  --notes-z-sticky: 10;
+  --notes-z-dropdown: 100;
+  --notes-z-drawer: 200;
+  --notes-z-modal: 300;
+  --notes-z-toast: 400;
+
+  color-scheme: light;
+}
+
+/* --- Dark ----------------------------------------------------------------
+ * Not an inversion. The surfaces stay slightly warm so long-form reading is
+ * comfortable, and the green is lifted because #25b003 on a near-black ground
+ * does not clear 4.5:1 for text. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --notes-primary: #3ecc19;
+    --notes-primary-hover: #4fd82c;
+    --notes-primary-active: #35b613;
+    --notes-primary-soft: #16240f;
+    --notes-primary-border: #2b5a1c;
+    --notes-on-primary: #08210a;
+
+    --notes-bg: #101310;
+    --notes-surface: #181c18;
+    --notes-surface-secondary: #1f241f;
+    --notes-surface-hover: #262c26;
+    --notes-surface-raised: #1f241f;
+    --notes-overlay: rgb(0 0 0 / 62%);
+
+    --notes-text-primary: #e8ece8;
+    --notes-text-secondary: #a0aba0;
+    --notes-text-tertiary: #778377;
+    --notes-text-inverse: #101310;
+
+    --notes-border: #2a302a;
+    --notes-border-strong: #3a423a;
+    --notes-focus-ring: #4fd82c;
+
+    --notes-danger: #f08579;
+    --notes-danger-soft: #2c1512;
+    --notes-warning: #e0a44a;
+    --notes-warning-soft: #2a1f0e;
+    --notes-info: #6fb2e8;
+    --notes-info-soft: #10202c;
+
+    --note-default: var(--notes-surface);
+    --note-default-border: var(--notes-border);
+    --note-coral: #2e1a18;      --note-coral-border: #4a2823;
+    --note-peach: #2d2115;      --note-peach-border: #48331d;
+    --note-sand: #2b2814;       --note-sand-border: #453f1d;
+    --note-sage: #172514;      --note-sage-border: #2b4426;
+    --note-mint: #12261f;       --note-mint-border: #21453a;
+    --note-sky: #141f2c;        --note-sky-border: #23394f;
+    --note-lavender: #1e1a2c;   --note-lavender-border: #342c4d;
+    --note-blush: #2a1622;      --note-blush-border: #46263a;
+    --note-graphite: #1e211f;   --note-graphite-border: #333935;
+
+    --notes-shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
+    --notes-shadow-sm: 0 1px 3px rgb(0 0 0 / 36%), 0 1px 2px rgb(0 0 0 / 24%);
+    --notes-shadow-md: 0 4px 12px rgb(0 0 0 / 42%), 0 1px 3px rgb(0 0 0 / 28%);
+    --notes-shadow-lg: 0 12px 32px rgb(0 0 0 / 52%), 0 2px 8px rgb(0 0 0 / 32%);
+
+    color-scheme: dark;
+  }
+}
+
+/* The explicit choice wins in both directions, so the toggle works whichever
+ * way the system is set. */
+:root[data-theme='dark'] {
+  --notes-primary: #3ecc19;
+  --notes-primary-hover: #4fd82c;
+  --notes-primary-active: #35b613;
+  --notes-primary-soft: #16240f;
+  --notes-primary-border: #2b5a1c;
+  --notes-on-primary: #08210a;
+
+  --notes-bg: #101310;
+  --notes-surface: #181c18;
+  --notes-surface-secondary: #1f241f;
+  --notes-surface-hover: #262c26;
+  --notes-surface-raised: #1f241f;
+  --notes-overlay: rgb(0 0 0 / 62%);
+
+  --notes-text-primary: #e8ece8;
+  --notes-text-secondary: #a0aba0;
+  --notes-text-tertiary: #778377;
+  --notes-text-inverse: #101310;
+
+  --notes-border: #2a302a;
+  --notes-border-strong: #3a423a;
+  --notes-focus-ring: #4fd82c;
+
+  --notes-danger: #f08579;
+  --notes-danger-soft: #2c1512;
+  --notes-warning: #e0a44a;
+  --notes-warning-soft: #2a1f0e;
+  --notes-info: #6fb2e8;
+  --notes-info-soft: #10202c;
+
+  --note-default: var(--notes-surface);
+  --note-default-border: var(--notes-border);
+  --note-coral: #2e1a18;      --note-coral-border: #4a2823;
+  --note-peach: #2d2115;      --note-peach-border: #48331d;
+  --note-sand: #2b2814;       --note-sand-border: #453f1d;
+  --note-sage: #172514;       --note-sage-border: #2b4426;
+  --note-mint: #12261f;       --note-mint-border: #21453a;
+  --note-sky: #141f2c;        --note-sky-border: #23394f;
+  --note-lavender: #1e1a2c;   --note-lavender-border: #342c4d;
+  --note-blush: #2a1622;      --note-blush-border: #46263a;
+  --note-graphite: #1e211f;   --note-graphite-border: #333935;
+
+  --notes-shadow-xs: 0 1px 2px rgb(0 0 0 / 30%);
+  --notes-shadow-sm: 0 1px 3px rgb(0 0 0 / 36%), 0 1px 2px rgb(0 0 0 / 24%);
+  --notes-shadow-md: 0 4px 12px rgb(0 0 0 / 42%), 0 1px 3px rgb(0 0 0 / 28%);
+  --notes-shadow-lg: 0 12px 32px rgb(0 0 0 / 52%), 0 2px 8px rgb(0 0 0 / 32%);
+
+  color-scheme: dark;
+}

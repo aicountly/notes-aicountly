@@ -1,0 +1,421 @@
+/* ---------------------------------------------------------------------------
+ * The editor.
+ *
+ * This is where people spend their time, so the rules are typographic rather
+ * than decorative: one comfortable measure, generous leading, and no chrome
+ * that is not being used right now. The formatting toolbar appears on selection
+ * and goes away again; there is no permanent ribbon.
+ * ------------------------------------------------------------------------- */
+
+.note-editor-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--notes-surface);
+  min-height: 0;
+}
+
+.editor__header {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) var(--notes-space-4);
+  border-bottom: 1px solid var(--notes-border);
+  flex-shrink: 0;
+  min-height: 48px;
+}
+
+.editor__back { display: none; }
+
+.editor__breadcrumb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-tertiary);
+  overflow: hidden;
+}
+.editor__breadcrumb span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.editor__actions { display: flex; align-items: center; gap: 2px; }
+
+.editor__scroll {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.editor__sheet {
+  max-width: var(--notes-editor-measure);
+  margin: 0 auto;
+  padding: var(--notes-space-8) var(--notes-space-6) 40vh;
+}
+/* The tail of blank space is deliberate: it lets the last paragraph sit in the
+   middle of the screen rather than pinned to the bottom edge. */
+
+.editor__title {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: var(--notes-text-3xl);
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  margin-bottom: var(--notes-space-4);
+  font-family: inherit;
+  resize: none;
+  overflow: hidden;
+}
+.editor__title::placeholder { color: var(--notes-text-tertiary); font-weight: 600; }
+
+.editor__meta-row {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--notes-space-5);
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-tertiary);
+}
+
+.editor__readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  margin-bottom: var(--notes-space-4);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-info-soft);
+  color: var(--notes-info);
+  font-size: var(--notes-text-sm);
+}
+
+/* --- ProseMirror content -------------------------------------------------- */
+
+.ProseMirror {
+  outline: none;
+  font-size: var(--notes-text-lg);
+  line-height: 1.7;
+  color: var(--notes-text-primary);
+  overflow-wrap: break-word;
+}
+
+.ProseMirror > * + * { margin-top: 0.75em; }
+
+.ProseMirror p { margin: 0; }
+
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3 {
+  margin: 1.4em 0 0.3em;
+  font-weight: 660;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+.ProseMirror h1 { font-size: 1.55em; }
+.ProseMirror h2 { font-size: 1.28em; }
+.ProseMirror h3 { font-size: 1.1em; }
+.ProseMirror > h1:first-child,
+.ProseMirror > h2:first-child,
+.ProseMirror > h3:first-child { margin-top: 0; }
+
+.ProseMirror a {
+  color: var(--notes-primary-active);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+.ProseMirror strong { font-weight: 660; }
+
+.ProseMirror code {
+  font-family: var(--notes-font-mono);
+  font-size: 0.87em;
+  padding: 0.12em 0.36em;
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface-secondary);
+  border: 1px solid var(--notes-border);
+}
+
+.ProseMirror pre {
+  font-family: var(--notes-font-mono);
+  font-size: var(--notes-text-sm);
+  line-height: 1.6;
+  padding: var(--notes-space-4);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-secondary);
+  border: 1px solid var(--notes-border);
+  /* Code must scroll inside its own box; the page must never scroll sideways. */
+  overflow-x: auto;
+}
+.ProseMirror pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+
+.ProseMirror blockquote {
+  margin: 1em 0;
+  padding-left: var(--notes-space-4);
+  border-left: 3px solid var(--notes-primary-border);
+  color: var(--notes-text-secondary);
+}
+
+.ProseMirror ul,
+.ProseMirror ol { padding-left: 1.4em; margin: 0; }
+.ProseMirror li { margin: 0.15em 0; }
+.ProseMirror li > p { margin: 0; }
+
+.ProseMirror ul[data-type='taskList'] { list-style: none; padding-left: 0; }
+.ProseMirror ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+}
+.ProseMirror ul[data-type='taskList'] li > label {
+  flex-shrink: 0;
+  margin-top: 0.35em;
+  user-select: none;
+}
+.ProseMirror ul[data-type='taskList'] li > div { flex: 1; min-width: 0; }
+.ProseMirror ul[data-type='taskList'] input[type='checkbox'] {
+  width: 16px; height: 16px;
+  accent-color: var(--notes-primary);
+  cursor: pointer;
+}
+/* A ticked item is dimmed, not hidden: the list is a record of what was done. */
+.ProseMirror ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--notes-text-tertiary);
+  text-decoration: line-through;
+}
+
+.ProseMirror hr {
+  border: 0;
+  border-top: 1px solid var(--notes-border);
+  margin: 1.6em 0;
+}
+
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--notes-radius-md);
+  display: block;
+}
+
+.ProseMirror mark {
+  background: var(--note-sand);
+  border-radius: 2px;
+  padding: 0.05em 0.15em;
+  color: inherit;
+}
+
+/* Tables scroll inside their own container rather than widening the page. */
+.ProseMirror .tableWrapper { overflow-x: auto; margin: 1em 0; }
+
+.ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--notes-text-base);
+  table-layout: fixed;
+}
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid var(--notes-border);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  vertical-align: top;
+  min-width: 5em;
+}
+.ProseMirror th { background: var(--notes-surface-secondary); font-weight: 620; text-align: left; }
+.ProseMirror .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--notes-primary-soft);
+  pointer-events: none;
+}
+
+.ProseMirror .callout {
+  display: flex;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-3) var(--notes-space-4);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-info-soft);
+  border: 1px solid transparent;
+  margin: 1em 0;
+}
+.ProseMirror .callout[data-tone='warning'] { background: var(--notes-warning-soft); }
+.ProseMirror .callout[data-tone='success'] { background: var(--notes-primary-soft); }
+.ProseMirror .callout[data-tone='danger'] { background: var(--notes-danger-soft); }
+
+/* Placeholder on the empty document only — a hint on every empty paragraph
+   turns a half-written note into a page of grey suggestions. */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--notes-text-tertiary);
+}
+
+.ProseMirror-selectednode {
+  outline: 2px solid var(--notes-primary);
+  outline-offset: 2px;
+  border-radius: var(--notes-radius-sm);
+}
+
+/* --- Inline nodes --------------------------------------------------------- */
+
+.note-link-chip,
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0.05em 0.4em;
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+  font-size: 0.94em;
+  font-weight: 550;
+  text-decoration: none;
+  cursor: pointer;
+}
+.mention-chip { background: var(--notes-info-soft); color: var(--notes-info); }
+.date-chip {
+  padding: 0.05em 0.4em;
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+  font-size: 0.94em;
+}
+
+/* --- Floating toolbars ---------------------------------------------------- */
+
+.bubble-toolbar,
+.slash-menu {
+  z-index: var(--notes-z-dropdown);
+  background: var(--notes-surface-raised);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  box-shadow: var(--notes-shadow-lg);
+}
+
+.bubble-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+}
+
+.bubble-toolbar__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-secondary);
+  cursor: pointer;
+}
+.bubble-toolbar__button:hover { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+.bubble-toolbar__button--active { background: var(--notes-primary-soft); color: var(--notes-primary-active); }
+.bubble-toolbar__button--pulse { color: var(--notes-primary); width: auto; padding: 0 var(--notes-space-2); gap: 5px; font-size: var(--notes-text-sm); font-weight: 600; }
+
+.bubble-toolbar__divider { width: 1px; height: 18px; background: var(--notes-border); margin: 0 3px; }
+
+.slash-menu {
+  width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--notes-space-1);
+}
+
+.slash-menu__group-label {
+  padding: var(--notes-space-2) var(--notes-space-3) var(--notes-space-1);
+  font-size: var(--notes-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--notes-text-tertiary);
+}
+
+.slash-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  width: 100%;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.slash-menu__item--active { background: var(--notes-primary-soft); }
+
+.slash-menu__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px; height: 30px;
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+  flex-shrink: 0;
+}
+.slash-menu__item--active .slash-menu__icon { background: var(--notes-surface); color: var(--notes-primary); }
+
+.slash-menu__label { font-size: var(--notes-text-sm); font-weight: 550; }
+.slash-menu__hint { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+.slash-menu__empty { padding: var(--notes-space-4); text-align: center; font-size: var(--notes-text-sm); color: var(--notes-text-tertiary); }
+
+/* --- Right-hand panels ---------------------------------------------------- */
+
+.side-panel {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--notes-border);
+  background: var(--notes-bg);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.side-panel__header {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-3) var(--notes-space-4);
+  border-bottom: 1px solid var(--notes-border);
+}
+.side-panel__title { flex: 1; margin: 0; font-size: var(--notes-text-sm); font-weight: 650; }
+.side-panel__body { flex: 1; overflow-y: auto; padding: var(--notes-space-4); }
+
+@media (max-width: 1280px) {
+  /* Below this the editor's measure starts to suffer; the panel becomes an
+     overlay rather than squeezing the writing area. */
+  .side-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: var(--notes-z-drawer);
+    box-shadow: var(--notes-shadow-lg);
+  }
+}
+
+@media (max-width: 860px) {
+  .editor__back { display: inline-flex; }
+  .editor__sheet { padding: var(--notes-space-5) var(--notes-space-4) 35vh; }
+  .editor__title { font-size: var(--notes-text-2xl); }
+  .ProseMirror { font-size: var(--notes-text-md); }
+  .side-panel { width: 100%; }
+}
+
+@media print {
+  .editor__scroll { overflow: visible; }
+  .editor__sheet { max-width: none; padding: 0; }
+  .ProseMirror { font-size: 11pt; color: #000; }
+  .ProseMirror a { color: #000; }
+  .ProseMirror pre, .ProseMirror code { background: #f4f4f4; border-color: #ddd; }
+}
