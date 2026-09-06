@@ -229,6 +229,71 @@ final class SyncTest extends TestCase
         $this->assertCount(0, $this->alice->get('/notes')['body']['data'], 'nothing in an over-long batch is applied');
     }
 
+    public function testTurningAFlagOffTravelsThroughTheQueueToo(): void
+    {
+        $note = $this->alice->post('/notes', ['document' => Support::doc('filed away')])['body']['data'];
+        $this->alice->post('/notes/' . $note['id'] . '/archive');
+
+        $result = $this->push($this->alice, [self::op('note.unarchive', $note['id'])]);
+
+        $this->assertSame('applied', $result['body']['data'][0]['status']);
+        $this->assertFalse($this->alice->get('/notes/' . $note['id'])['body']['data']['is_archived']);
+    }
+
+    // -- Checklist items ----------------------------------------------------
+
+    /** @return array<string, mixed> The first action mirrored from a note's checklist. */
+    private function firstAction(ApiClient $api, string $noteId): array
+    {
+        return $api->get('/notes/' . $noteId . '/actions')['body']['data'][0];
+    }
+
+    public function testAnItemTickedOfflineIsCompletedOnTheServer(): void
+    {
+        $note = $this->alice->post('/notes', [
+            'title' => 'Monday',
+            'document' => Support::checklist([['text' => 'Send the reminder', 'checked' => false]]),
+        ])['body']['data'];
+        $action = $this->firstAction($this->alice, $note['id']);
+
+        $result = $this->push($this->alice, [[
+            'operation_id' => Uuid::v4(),
+            'entity_type' => 'action',
+            'entity_id' => $action['id'],
+            'operation' => 'action.complete',
+            'payload' => ['status' => 'done'],
+            'client_stamp' => '2026-01-01T09:00:00Z',
+        ]]);
+
+        $entry = $result['body']['data'][0];
+        $this->assertSame('applied', $entry['status']);
+        $this->assertSame('action', $entry['entity_type']);
+        $this->assertSame('done', $entry['action']['status']);
+        $this->assertSame('done', $this->firstAction($this->alice, $note['id'])['status']);
+    }
+
+    public function testAnotherUserCannotTickAnItemOnANoteTheyCannotOpen(): void
+    {
+        $note = $this->alice->post('/notes', [
+            'document' => Support::checklist([['text' => 'Alice only', 'checked' => false]]),
+        ])['body']['data'];
+        $action = $this->firstAction($this->alice, $note['id']);
+
+        // The action id carries no note in it, so without resolving the note
+        // first the id would itself be the authorisation.
+        $result = $this->push($this->bob, [[
+            'operation_id' => Uuid::v4(),
+            'entity_type' => 'action',
+            'entity_id' => $action['id'],
+            'operation' => 'action.complete',
+            'payload' => ['status' => 'done'],
+        ]]);
+
+        $this->assertSame('rejected', $result['body']['data'][0]['status']);
+        $this->assertSame('NOT_FOUND', $result['body']['data'][0]['error']['code']);
+        $this->assertSame('open', $this->firstAction($this->alice, $note['id'])['status']);
+    }
+
     // -- Trash and restore --------------------------------------------------
 
     public function testTrashAndRestoreTravelThroughTheQueue(): void

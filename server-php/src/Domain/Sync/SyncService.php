@@ -13,6 +13,7 @@ use Aicountly\Api\Domain\Notes\NoteRepository;
 use Aicountly\Api\Domain\Notes\NotesService;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Support\Logger;
+use Aicountly\Api\Support\Str;
 use Aicountly\Api\Support\Uuid;
 
 /**
@@ -146,7 +147,12 @@ final class SyncService
      */
     private function applyOne(Identity $identity, array $operation): array
     {
-        $name = strtolower(trim((string) (is_scalar($operation['operation'] ?? null) ? $operation['operation'] : '')));
+        // Bounded here, once, so nothing downstream has to think about it: the
+        // ledger column is varchar(30) and the name is echoed back in a result.
+        $name = Str::limit(
+            strtolower(trim((string) (is_scalar($operation['operation'] ?? null) ? $operation['operation'] : ''))),
+            30,
+        );
         $entityId = Uuid::isValid($operation['entity_id'] ?? null)
             ? strtolower((string) $operation['entity_id'])
             : null;
@@ -235,7 +241,7 @@ final class SyncService
             // one the user can take back, so it only happens online, in front
             // of the person doing it.
             default => throw ApiException::badRequest(
-                sprintf('`%s` is not an operation this API replays.', substr($operation, 0, 40)),
+                sprintf('`%s` is not an operation this API replays.', $operation),
             ),
         };
     }
@@ -322,7 +328,7 @@ final class SyncService
                 'user_id' => $identity->userId,
                 'entity_type' => $entityType,
                 'entity_id' => $entityId,
-                'operation' => substr($operation, 0, 30),
+                'operation' => $operation,
                 'status' => $status,
                 'result' => json_encode($result, JSON_UNESCAPED_SLASHES),
                 'client_stamp' => $clientStamp,
