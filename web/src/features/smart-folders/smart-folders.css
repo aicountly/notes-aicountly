@@ -13,6 +13,10 @@
 
 /* --- Match mode ----------------------------------------------------------- */
 
+/* A fieldset is the right element for a radio group and the wrong one for the
+   box the browser draws around it. */
+.sf-fieldset { border: 0; margin: 0; padding: 0; }
+
 .sf-match { display: flex; gap: var(--notes-space-2); flex-wrap: wrap; }
 
 .sf-match__option {
