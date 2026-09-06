@@ -31,6 +31,24 @@ final class Routes
         self::reminders($router);
         self::pulse($router);
         self::meetings($router);
+        self::sync($router);
+    }
+
+    /**
+     * Offline sync and export.
+     *
+     * `/sync/push` is the only endpoint that takes a *batch* of mutations, and
+     * the only one that answers per-item rather than all-or-nothing: one
+     * conflicted note must not stop the other nine from being saved.
+     */
+    private static function sync(Router $router): void
+    {
+        $sync = static fn (): Controllers\SyncController => new Controllers\SyncController();
+        $router->post('/sync/push', static fn (Request $r, Identity $i) => $sync()->push($r, $i));
+        $router->get('/sync/pull', static fn (Request $r, Identity $i) => $sync()->pull($r, $i));
+
+        $export = static fn (): Controllers\ExportController => new Controllers\ExportController();
+        $router->get('/notes/{id}/export', static fn (Request $r, Identity $i) => $export()->note($r, $i));
     }
 
     private static function notes(Router $router): void
