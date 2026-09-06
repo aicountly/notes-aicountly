@@ -78,7 +78,7 @@ export function useNoteMembers(noteId: string | null): UseQueryResult<NoteMember
 }
 
 /**
- * Everything cached about this note, dropped.
+ * Every cached note read, dropped.
  *
  * Broader than it looks — `queryKeys.notes.all` is the prefix of every note
  * key — and that is the point: a role change decides what the reader may see
@@ -86,8 +86,7 @@ export function useNoteMembers(noteId: string | null): UseQueryResult<NoteMember
  * would show access that no longer exists. Only mounted queries actually
  * refetch.
  */
-function invalidateSharing(client: QueryClient, noteId: string): void {
-  void client.invalidateQueries({ queryKey: queryKeys.notes.members(noteId) })
+function invalidateSharing(client: QueryClient): void {
   void client.invalidateQueries({ queryKey: queryKeys.notes.all })
 }
 
@@ -105,7 +104,7 @@ export function useAddNoteMember() {
   return useMutation<NoteMemberRow, ApiError, AddMemberInput>({
     mutationFn: ({ noteId, user_id, role }) =>
       api.post<NoteMemberRow>(`/notes/${noteId}/members`, { user_id, role }),
-    onSuccess: (_member, { noteId }) => invalidateSharing(client, noteId),
+    onSuccess: () => invalidateSharing(client),
   })
 }
 
@@ -121,7 +120,7 @@ export function useUpdateNoteMemberRole() {
   return useMutation<NoteMemberRow, ApiError, UpdateMemberInput>({
     mutationFn: ({ noteId, userId, role }) =>
       api.patch<NoteMemberRow>(`/notes/${noteId}/members/${encodeURIComponent(userId)}`, { role }),
-    onSuccess: (_member, { noteId }) => invalidateSharing(client, noteId),
+    onSuccess: () => invalidateSharing(client),
   })
 }
 
@@ -131,7 +130,7 @@ export function useRemoveNoteMember() {
   return useMutation<void, ApiError, { noteId: string; userId: string }>({
     mutationFn: ({ noteId, userId }) =>
       api.delete(`/notes/${noteId}/members/${encodeURIComponent(userId)}`),
-    onSuccess: (_result, { noteId }) => invalidateSharing(client, noteId),
+    onSuccess: () => invalidateSharing(client),
   })
 }
 
