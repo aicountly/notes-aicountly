@@ -80,25 +80,42 @@ interface PaletteItem {
 
 const GROUP_ORDER = ['Create', 'Go to', 'View', 'Assistant', 'Notebooks', 'Tags'] as const
 
-function orderGroups(items: PaletteItem[]): PaletteItem[] {
-  const rank = (group: string) => {
-    const at = (GROUP_ORDER as readonly string[]).indexOf(group)
-    return at === -1 ? GROUP_ORDER.length : at
-  }
-
-  return [...items].sort((a, b) => rank(a.group) - rank(b.group))
+function groupRank(group: string): number {
+  const at = (GROUP_ORDER as readonly string[]).indexOf(group)
+  return at === -1 ? GROUP_ORDER.length : at
 }
 
+/**
+ * Filter, then order — by group, not by row.
+ *
+ * A pure score ordering interleaves groups and repeats their headings, and a
+ * pure group ordering buries an exact match under a group that merely happens
+ * to come first. So a group is ranked by its best row, and rows are ranked
+ * inside it: typing "remind" puts Reminders at the top without scattering
+ * Create's three commands through the list.
+ */
 function filterItems(items: PaletteItem[], query: string): PaletteItem[] {
-  if (query.trim() === '') return orderGroups(items)
+  if (query.trim() === '') {
+    return [...items].sort((a, b) => groupRank(a.group) - groupRank(b.group))
+  }
 
   const scored = items
     .map((item) => ({ item, score: fuzzyScore(query, `${item.label} ${item.keywords ?? ''}`) }))
     .filter((entry): entry is { item: PaletteItem; score: number } => entry.score !== null)
 
-  // Group order is kept so the list does not reshuffle wholesale on every
-  // keystroke; the score only orders within a group.
-  return orderGroups(scored.sort((a, b) => b.score - a.score).map((entry) => entry.item))
+  const best = new Map<string, number>()
+  for (const entry of scored) {
+    best.set(entry.item.group, Math.max(best.get(entry.item.group) ?? 0, entry.score))
+  }
+
+  return scored
+    .sort((a, b) => {
+      const byGroup = (best.get(b.item.group) ?? 0) - (best.get(a.item.group) ?? 0)
+      if (byGroup !== 0) return byGroup
+      if (a.item.group !== b.item.group) return groupRank(a.item.group) - groupRank(b.item.group)
+      return b.score - a.score
+    })
+    .map((entry) => entry.item)
 }
 
 const MODE_TITLE: Record<PaletteMode, string> = {

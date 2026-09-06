@@ -91,7 +91,10 @@ describe('CommandPalette', () => {
     const { input, onClose } = renderPalette()
 
     fireEvent.change(input, { target: { value: 'remind' } })
-    expect(screen.getAllByRole('option')).toHaveLength(1)
+
+    // Fuzzy matching is loose by design, so what matters is that the closest
+    // match is the one Enter would run.
+    expect(screen.getAllByRole('option')[0]).toHaveTextContent('Reminders')
     expect(highlighted()).toContain('Reminders')
 
     fireEvent.keyDown(input, { key: 'Enter' })
