@@ -215,6 +215,88 @@ final class ActionsTest extends TestCase
         $this->assertSame(404, $this->alice->delete('/actions/' . Uuid::v4())['status']);
     }
 
+    // -- Input the client should never have sent ----------------------------
+
+    /**
+     * PHP parses dates PostgreSQL cannot store.
+     *
+     * `new DateTimeImmutable('@99999999999999')` is a perfectly good PHP date
+     * in the year 3170843, and binding it made the *database* reject the
+     * INSERT — which reached the client as a 500 quoting a fragment of the
+     * failed statement. Each of these is a client mistake and deserves the 422
+     * a bad date gets.
+     */
+    public function testADateTheDatabaseCannotStoreIsRefusedRatherThanCrashing(): void
+    {
+        $noteId = $this->note()['id'];
+        $action = $this->action($noteId);
+
+        foreach (['+999999999 years', '@99999999999999', '-4713-01-01T00:00:00Z', '0000-00-00'] as $due) {
+            $created = $this->alice->post('/notes/' . $noteId . '/actions', ['text' => 'x', 'due_at' => $due]);
+            $this->assertSame(422, $created['status'], 'creating with ' . $due);
+
+            $patched = $this->alice->patch('/actions/' . $action['id'], ['due_at' => $due]);
+            $this->assertSame(422, $patched['status'], 'patching with ' . $due);
+        }
+
+        // The action came through all of it untouched.
+        $this->assertNull($this->alice->get('/notes/' . $noteId . '/actions')['body']['data'][0]['due_at']);
+    }
+
+    /**
+     * A field sent as the wrong type is refused, not written down.
+     *
+     * `(string) ['buy milk']` is a PHP warning and the literal text "Array", so
+     * these used to succeed and store an action called *Array*, or assign one
+     * to a user of that name.
+     */
+    public function testAFieldSentAsTheWrongTypeIsRefused(): void
+    {
+        $noteId = $this->note()['id'];
+        $action = $this->action($noteId);
+
+        $this->assertSame(422, $this->alice->post('/notes/' . $noteId . '/actions', [
+            'text' => ['buy milk'],
+        ])['status']);
+        $this->assertSame(422, $this->alice->post('/notes/' . $noteId . '/actions', [
+            'text' => 'ok',
+            'assigned_user_id' => ['user-b'],
+        ])['status']);
+        $this->assertSame(422, $this->alice->patch('/actions/' . $action['id'], ['text' => ['x']])['status']);
+        $this->assertSame(422, $this->alice->patch('/actions/' . $action['id'], ['due_at' => ['x']])['status']);
+
+        // An action cannot be blanked either: create refuses empty text, and an
+        // edit that emptied it would leave an unnameable row in the panel.
+        $this->assertSame(422, $this->alice->patch('/actions/' . $action['id'], ['text' => '   '])['status']);
+
+        $survivors = $this->alice->get('/notes/' . $noteId . '/actions')['body']['data'];
+        $this->assertCount(1, $survivors, 'nothing malformed was stored');
+        $this->assertSame('File the GST return', $survivors[0]['text']);
+    }
+
+    /**
+     * `/actions` is a personal to-do list, not the note's action list.
+     *
+     * Assigned to the caller or unassigned — work handed to someone else stays
+     * out of it, including for the person who handed it over.
+     */
+    public function testTheOpenListIsAssignedToMeOrNobody(): void
+    {
+        $noteId = $this->note()['id'];
+        $this->alice->post('/notes/' . $noteId . '/actions', ['text' => 'Mine', 'assigned_user_id' => 'user-a']);
+        $this->alice->post('/notes/' . $noteId . '/actions', ['text' => 'Nobody\'s']);
+        $this->alice->post('/notes/' . $noteId . '/actions', ['text' => 'Bob\'s', 'assigned_user_id' => 'user-b']);
+        $this->share($noteId, 'editor');
+
+        $mine = array_column($this->alice->get('/actions')['body']['data'], 'text');
+        sort($mine);
+        $this->assertSame(['Mine', 'Nobody\'s'], $mine, 'work delegated to Bob is not Alice\'s to do');
+
+        $bobs = array_column($this->bob->get('/actions')['body']['data'], 'text');
+        sort($bobs);
+        $this->assertSame(['Bob\'s', 'Nobody\'s'], $bobs);
+    }
+
     public function testADeletedActionStaysGone(): void
     {
         $action = $this->action($this->note()['id']);

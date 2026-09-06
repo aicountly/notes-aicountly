@@ -33,6 +33,12 @@ export interface NoteEditorPaneProps {
   basePath: string
   /** Notes created from here land in this notebook. */
   notebookId?: string | null
+  /**
+   * False where a new note has no business being filed — Trash, Archive and
+   * Shared. Creating one there would leave it at, say, `/trash/{id}`: a live
+   * note wearing the URL of a list it is not in.
+   */
+  canCreate?: boolean
 }
 
 export function NoteEditorPane({
@@ -41,6 +47,7 @@ export function NoteEditorPane({
   listLabel,
   basePath,
   notebookId = null,
+  canCreate = true,
 }: NoteEditorPaneProps) {
   const navigate = useNavigate()
   const config = useAppConfig()
@@ -56,6 +63,14 @@ export function NoteEditorPane({
 
   const [infoOpen, setInfoOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Pin and favourite are optimistic; without this the only sign of a refused
+  // change is the icon quietly flipping back.
+  const [flagError, setFlagError] = useState<string | null>(null)
+  /** Bumped by "Try again", so the retry does not depend on `create`'s identity. */
+  const [createAttempt, setCreateAttempt] = useState(0)
+
+  // A refusal belongs to the note it was about; opening another one clears it.
+  useEffect(() => setFlagError(null), [noteId])
 
   // One create per visit to /new, even though StrictMode runs effects twice
   // and this effect's dependencies are not referentially stable.
@@ -64,6 +79,12 @@ export function NoteEditorPane({
   useEffect(() => {
     if (noteId !== 'new') {
       startedCreate.current = false
+      return
+    }
+    // `/trash/new` typed by hand, or arrived at from a stale link: send it to
+    // the one list a new note does belong in rather than creating it here.
+    if (!canCreate) {
+      navigate('/notes/new', { replace: true })
       return
     }
     if (startedCreate.current) return
@@ -77,7 +98,7 @@ export function NoteEditorPane({
       .catch((reason: unknown) =>
         setCreateError(reason instanceof Error ? reason.message : 'That note could not be created.'),
       )
-  }, [noteId, notebookId, basePath, create, navigate])
+  }, [noteId, notebookId, basePath, canCreate, createAttempt, create, navigate])
 
   if (noteId === null) {
     return (
@@ -86,11 +107,21 @@ export function NoteEditorPane({
           <EmptyState
             icon="note"
             title="Nothing open"
-            description="Choose a note from the list, or start a new one."
+            description={
+              canCreate
+                ? 'Choose a note from the list, or start a new one.'
+                : `Choose a note from ${listLabel} to read it here.`
+            }
             action={
-              <Button variant="primary" icon="plus" onClick={() => navigate(`${basePath}/new`)}>
-                New note
-              </Button>
+              canCreate ? (
+                <Button variant="primary" icon="plus" onClick={() => navigate(`${basePath}/new`)}>
+                  New note
+                </Button>
+              ) : (
+                <Button icon="note" onClick={() => navigate('/notes')}>
+                  Go to My Notes
+                </Button>
+              )
             }
           />
         </div>
@@ -114,6 +145,7 @@ export function NoteEditorPane({
                   onClick={() => {
                     startedCreate.current = false
                     setCreateError(null)
+                    setCreateAttempt((attempt) => attempt + 1)
                   }}
                 >
                   Try again
@@ -195,7 +227,13 @@ export function NoteEditorPane({
                 size="sm"
                 aria-pressed={open.is_pinned}
                 aria-label={open.is_pinned ? 'Unpin this note' : 'Pin this note'}
-                onClick={() => flag.mutate({ id: open.id, action: open.is_pinned ? 'unpin' : 'pin' })}
+                onClick={() => {
+                  setFlagError(null)
+                  flag.mutate(
+                    { id: open.id, action: open.is_pinned ? 'unpin' : 'pin' },
+                    { onError: (reason) => setFlagError(reason.message) },
+                  )
+                }}
               />
               <Button
                 icon={open.is_favourite ? 'star-filled' : 'star'}
@@ -206,9 +244,13 @@ export function NoteEditorPane({
                 aria-label={
                   open.is_favourite ? 'Remove from favourites' : 'Add to favourites'
                 }
-                onClick={() =>
-                  flag.mutate({ id: open.id, action: open.is_favourite ? 'unfavourite' : 'favourite' })
-                }
+                onClick={() => {
+                  setFlagError(null)
+                  flag.mutate(
+                    { id: open.id, action: open.is_favourite ? 'unfavourite' : 'favourite' },
+                    { onError: (reason) => setFlagError(reason.message) },
+                  )
+                }}
               />
             </>
           ) : null}
@@ -226,6 +268,15 @@ export function NoteEditorPane({
           <NoteMenu note={open} to={`${basePath}/${open.id}`} size="md" onRemoved={() => navigate(listPath)} />
         </div>
       </header>
+
+      {flagError ? (
+        <div className="editor__pane-notice">
+          <p className="notes-notice notes-notice--danger" role="alert">
+            <Icon name="alert" size={14} />
+            {flagError}
+          </p>
+        </div>
+      ) : null}
 
       {open.deleted_at ? (
         <div className="editor__pane-notice">

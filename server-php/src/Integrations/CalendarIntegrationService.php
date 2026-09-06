@@ -45,7 +45,7 @@ final class CalendarIntegrationService
         private readonly AicountlyClient $client = new AicountlyClient(
             'calendar',
             Features::CALENDAR,
-            'CALENDAR_API_URL',
+            'calendar',
         ),
         private readonly MeetingService $meetings = new MeetingService(),
         private readonly NotesService $notes = new NotesService(),

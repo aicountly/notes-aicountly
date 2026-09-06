@@ -265,6 +265,8 @@ export function NotesPage({ scope }: { scope: NotesScope }) {
 
   const listScope = scope === 'archive' ? 'archive' : scope === 'trash' ? 'trash' : 'active'
   const isSmartFolder = scope === 'smart-folder'
+  // Where a new note would actually belong to the list it is created from.
+  const canCreate = scope === 'active' || scope === 'notebook'
   // Pinning only means something where the list is the user's working set.
   const splitPinned = scope === 'active' || scope === 'notebook' || scope === 'tag' || scope === 'shared'
 
@@ -321,7 +323,7 @@ export function NotesPage({ scope }: { scope: NotesScope }) {
           <span className="notes-column__count">
             {feed.isPending ? '' : `${total}${feed.hasMore ? '+' : ''} ${total === 1 ? 'note' : 'notes'}`}
           </span>
-          {scope === 'active' || scope === 'notebook' ? (
+          {canCreate ? (
             <Button
               icon="plus"
               iconOnly
@@ -390,6 +392,16 @@ export function NotesPage({ scope }: { scope: NotesScope }) {
             </p>
           ) : null}
 
+          {/* The pinned section is a second request, so it can fail on its own.
+              Saying so beats a Pinned heading that quietly stops appearing —
+              except when the list is already explaining that it is offline. */}
+          {splitPinned && pinned.isError && !feed.fromCache ? (
+            <p className="notes-notice notes-notice--danger" role="alert">
+              <Icon name="alert" size={14} />
+              Pinned notes could not be loaded. {pinned.error.message}
+            </p>
+          ) : null}
+
           {feed.isPending ? (
             <NotesSkeleton view={view} />
           ) : feed.error ? (
@@ -406,7 +418,7 @@ export function NotesPage({ scope }: { scope: NotesScope }) {
               title={EMPTY[scope].title}
               description={EMPTY[scope].description}
               action={
-                scope === 'active' || scope === 'notebook' ? (
+                canCreate ? (
                   <Button variant="primary" icon="plus" onClick={() => navigate(`${basePath}/new`)}>
                     New note
                   </Button>
@@ -453,6 +465,7 @@ export function NotesPage({ scope }: { scope: NotesScope }) {
         listLabel={title}
         basePath={basePath}
         notebookId={scope === 'notebook' ? notebookId : null}
+        canCreate={canCreate}
       />
     </div>
   )

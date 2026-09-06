@@ -21,6 +21,9 @@ use Aicountly\Api\Support\Uuid;
  */
 final class TagsController
 {
+    /** How many tags one merge may fold at once. */
+    private const MAX_MERGE_SOURCES = 100;
+
     public function __construct(private readonly TagService $tags = new TagService())
     {
     }
@@ -62,10 +65,22 @@ final class TagsController
         return Response::noContent();
     }
 
-    /** Fold several tags into one: `{"source_ids": [...], "target_id": "…"}`. */
+    /**
+     * Fold several tags into one: `{"source_ids": [...], "target_id": "…"}`.
+     *
+     * The merge itself runs in one transaction and consumes each source in
+     * turn, so what this method hands over has to be a *set*: the same id twice
+     * would find the tag gone on the second pass, answer "That tag could not be
+     * found" about a tag the caller can plainly see, and roll the whole merge
+     * back. A duplicate is not an error — a multi-select that emits one is
+     * asking for the same thing twice.
+     */
     public function merge(Request $request, Identity $identity): Response
     {
-        $targetId = $request->string('target_id');
+        // Lower-cased on the way in, the way `uuidParam` does it, so that the
+        // "a source that is the target" check downstream is a string comparison
+        // that cannot be defeated by the case the client happened to send.
+        $targetId = strtolower($request->string('target_id'));
         if (!Uuid::isValid($targetId)) {
             // Rejecting the shape here keeps a malformed id out of a query
             // Postgres would refuse with a 500, and answers it the way an
@@ -73,12 +88,24 @@ final class TagsController
             throw ApiException::notFound('That tag');
         }
 
-        $sourceIds = array_values(array_filter(
-            array_map(static fn (mixed $id): string => is_scalar($id) ? (string) $id : '', $request->array('source_ids')),
+        $sourceIds = array_values(array_unique(array_filter(
+            array_map(
+                static fn (mixed $id): string => is_scalar($id) ? strtolower((string) $id) : '',
+                $request->array('source_ids'),
+            ),
             static fn (string $id): bool => Uuid::isValid($id),
-        ));
+        )));
         if ($sourceIds === []) {
             throw ApiException::validation(['source_ids' => 'Choose at least one tag to merge.']);
+        }
+        // A list this long is a client fault, not a person folding their
+        // filing: each entry costs three statements inside one transaction, so
+        // an unbounded one is a request that holds a connection open for as
+        // long as it likes.
+        if (count($sourceIds) > self::MAX_MERGE_SOURCES) {
+            throw ApiException::validation([
+                'source_ids' => sprintf('Merge at most %d tags at a time.', self::MAX_MERGE_SOURCES),
+            ]);
         }
 
         return Response::ok($this->tags->merge($identity, $sourceIds, $targetId));

@@ -3,8 +3,10 @@
  *
  * Capture is the product's first move, so the two things worth pinning down are
  * that it stays out of the way until it is used, and that saving is one gesture
- * that lands you in the note. The third is honesty: a deployment without
- * transcription must not offer a voice button that answers 503.
+ * that lands you in the note. The rest is honesty: a deployment without
+ * transcription must not offer a voice button that answers 503, a browser that
+ * cannot record must not offer one either, and the button that says "Record a
+ * voice note" has to open the recorder rather than an empty text note.
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
@@ -22,6 +24,19 @@ vi.mock('../../../auth/portal', () => ({ ensureSesKey: async () => 'test-session
 const { features } = vi.hoisted(() => ({
   features: { transcription: false, ocr: false, canvas: false } as Record<string, boolean>,
 }))
+
+/** jsdom has neither, so a browser that can record is something a test grants. */
+function grantRecordingSupport(): void {
+  Object.defineProperty(window, 'MediaRecorder', {
+    configurable: true,
+    writable: true,
+    value: Object.assign(function MediaRecorderStub() {}, { isTypeSupported: () => true }),
+  })
+  Object.defineProperty(navigator, 'mediaDevices', {
+    configurable: true,
+    value: { getUserMedia: async () => ({ getTracks: () => [] }) },
+  })
+}
 
 vi.mock('../../../app/AppConfigProvider', () => ({
   useFeature: (flag: string) => features[flag] ?? false,
@@ -66,6 +81,7 @@ beforeEach(() => {
   features.transcription = false
   features.ocr = false
   features.canvas = false
+  Reflect.deleteProperty(window, 'MediaRecorder')
 
   fetchMock.mockImplementation(async () => envelope({ id: 'created-1', display_title: 'Untitled note' }))
   globalThis.fetch = fetchMock as unknown as typeof fetch
@@ -98,22 +114,58 @@ describe('QuickCapture', () => {
     await user.click(screen.getByLabelText('Note'))
 
     expect(screen.getByRole('button', { name: 'New checklist' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'New voice note' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Record a voice note' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Scan a document' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'New drawing' })).not.toBeInTheDocument()
   })
 
   it('offers the shortcuts this deployment does have', async () => {
     features.transcription = true
-    features.canvas = true
+    features.ocr = true
+    grantRecordingSupport()
     const user = userEvent.setup()
     renderComposer()
 
     await user.click(screen.getByLabelText('Note'))
 
-    expect(screen.getByRole('button', { name: 'New voice note' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'New drawing' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Scan a document' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Record a voice note' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Scan a document' })).toBeInTheDocument()
+  })
+
+  it('does not offer recording in a browser that cannot record', async () => {
+    features.transcription = true
+    const user = userEvent.setup()
+    renderComposer()
+
+    await user.click(screen.getByLabelText('Note'))
+
+    expect(screen.queryByRole('button', { name: 'Record a voice note' })).not.toBeInTheDocument()
+  })
+
+  it('opens the recorder rather than an empty note', async () => {
+    features.transcription = true
+    grantRecordingSupport()
+    const user = userEvent.setup()
+    renderComposer()
+
+    await user.click(screen.getByLabelText('Note'))
+    await user.click(screen.getByRole('button', { name: 'Record a voice note' }))
+
+    expect(await screen.findByRole('dialog')).toHaveAccessibleName('Record a voice note')
+    // Nothing is created until there is a recording to save.
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.getByTestId('location')).toHaveTextContent('/')
+  })
+
+  it('opens the scanner rather than an empty note', async () => {
+    features.ocr = true
+    const user = userEvent.setup()
+    renderComposer()
+
+    await user.click(screen.getByLabelText('Note'))
+    await user.click(screen.getByRole('button', { name: 'Scan a document' }))
+
+    expect(await screen.findByRole('dialog')).toHaveAccessibleName('Scan a document')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('saves with Ctrl+Enter and opens the note it just made', async () => {

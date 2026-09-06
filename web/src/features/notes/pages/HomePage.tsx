@@ -99,6 +99,10 @@ export function HomePage() {
     .sort((a, b) => a.due - b.due)
     .slice(0, 6)
 
+  // Any of the three failing leaves a section silently missing, so the first
+  // failure is reported once and "Try again" refetches all of them.
+  const listError = recent.error ?? pinned.error ?? shared.error
+
   const continueEditing = recent.data?.notes.slice(0, 3) ?? []
   const olderNotes = recent.data?.notes.slice(3) ?? []
   const pinnedNotes = pinned.data?.notes ?? []
@@ -111,7 +115,7 @@ export function HomePage() {
     !recent.isPending &&
     !pinned.isPending &&
     !shared.isPending &&
-    !recent.isError &&
+    listError === null &&
     pinnedNotes.length === 0 &&
     continueEditing.length === 0 &&
     sharedNotes.length === 0 &&
@@ -132,11 +136,18 @@ export function HomePage() {
 
         <QuickCapture inputRef={composerRef} />
 
-        {recent.isError ? (
+        {listError ? (
           <div className="notes-error" role="alert">
-            <Icon name={recent.error.isOffline ? 'cloud-off' : 'alert'} size={24} />
-            <p className="notes-error__message">{recent.error.message}</p>
-            <Button icon="refresh" onClick={() => void recent.refetch()}>
+            <Icon name={listError.isOffline ? 'cloud-off' : 'alert'} size={24} />
+            <p className="notes-error__message">{listError.message}</p>
+            <Button
+              icon="refresh"
+              onClick={() => {
+                void recent.refetch()
+                void pinned.refetch()
+                void shared.refetch()
+              }}
+            >
               Try again
             </Button>
           </div>

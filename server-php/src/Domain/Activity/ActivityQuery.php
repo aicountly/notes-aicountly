@@ -72,10 +72,40 @@ final class ActivityQuery
 
         return [
             'entries' => array_map([self::class, 'present'], $rows),
-            // Counted in the same statement as the page, so the total cannot
-            // disagree with the rows it describes.
-            'total' => (int) ($rows[0]['total_count'] ?? 0),
+            // Counted in the same statement as the page, so a total can never
+            // disagree with the rows it describes. A window function only
+            // reports itself on a row, though, so a page past the end has
+            // nothing to carry it — and answering 0 there would tell a client
+            // scrolled to offset 200 that the note has no history at all.
+            'total' => $rows === []
+                ? $this->countFor($identity, $noteId)
+                : (int) ($rows[0]['total_count'] ?? 0),
         ];
+    }
+
+    /**
+     * The trail's length, for the one case the page itself cannot report it.
+     *
+     * Gated by the same CTE as the page rather than by the check above: a count
+     * is a read like any other, and one that trusted a caller to have asked
+     * first is the kind that survives a refactor into a leak.
+     */
+    private function countFor(Identity $identity, string $noteId): int
+    {
+        $row = Connection::selectOne(
+            'WITH RECURSIVE ' . NoteAccess::cte() . '
+             SELECT count(*) AS total_count
+             FROM note_activity act
+             JOIN note_access a ON a.note_id = act.note_id
+             WHERE act.note_id = :note_id',
+            [
+                'auth_user' => $identity->userId,
+                'auth_tenant' => $identity->tenantId,
+                'note_id' => $noteId,
+            ],
+        );
+
+        return (int) ($row['total_count'] ?? 0);
     }
 
     /**

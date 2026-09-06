@@ -70,7 +70,12 @@ final class ActionsController
         return Response::noContent();
     }
 
-    /** Everything still open for the caller, across every note they can see. */
+    /**
+     * The caller's own open actions, across every note they can see.
+     *
+     * "Own" is assigned-to-them or unassigned, not everything on those notes —
+     * see {@see NoteActionService::openForUser()}.
+     */
     public function open(Request $request, Identity $identity): Response
     {
         return Response::ok($this->actions->openForUser($identity, $request->queryInt('limit', 50, 1, 200)));

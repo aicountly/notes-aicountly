@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Aicountly\Api\Integrations;
 
-use Aicountly\Api\Env;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http\ApiException;
+use Aicountly\Api\Http\CompanyContext;
 use Aicountly\Api\Support\Logger;
 
 /**
@@ -23,6 +23,15 @@ use Aicountly\Api\Support\Logger;
  *   integration itself — one link endpoint away from reading a directory they
  *   have no access to — and no amount of checking on this side would fix it,
  *   because this side does not hold the other product's sharing rules.
+ *
+ * Two more things are written once here rather than in each adapter:
+ *
+ *   - **Where the product is.** Resolved through {@see SiblingApi} from this
+ *     deployment's own hostname, so a sandbox deployment reaches sandbox
+ *     siblings and nothing has to be configured per environment.
+ *   - **Which company is being asked about.** `cmp_id` / `fy_id` / `bo_id` go
+ *     on every outbound call when the inbound request carried them; see
+ *     {@see CompanyContext}.
  *
  * The rest is the discipline {@see \Aicountly\Api\Domain\Ai\HttpPulseProvider}
  * already follows: short timeouts, no redirect following (a redirect would
@@ -42,18 +51,27 @@ final class AicountlyClient
     /**
      * @param string $service Short name used in error envelopes and log keys.
      * @param string $feature The {@see Features} flag that must be on.
-     * @param string $baseUrlKey The .env key holding that product's API base.
+     * @param string $product The sibling's name or `product_code`, resolved
+     *        through {@see SiblingApi}. Not a URL and not an .env key: a
+     *        deployment that wants to override the address sets
+     *        `{PRODUCT}_API_ORIGIN`, and one that does not sets nothing.
      */
     public function __construct(
         private readonly string $service,
         private readonly string $feature,
-        private readonly string $baseUrlKey,
+        private readonly string $product,
     ) {
     }
 
+    /**
+     * The base this client's paths hang off, `https://host/api`.
+     *
+     * Derived from this deployment's own hostname unless overridden, so a
+     * sandbox deployment reaches sandbox siblings with nothing configured.
+     */
     public function base(): string
     {
-        return rtrim(trim(Env::get($this->baseUrlKey)), '/');
+        return SiblingApi::apiBase($this->product);
     }
 
     /** Escape an id from a request before it becomes part of a path. */
@@ -81,11 +99,6 @@ final class AicountlyClient
         Features::require($this->feature);
 
         $base = $this->base();
-        if ($base === '') {
-            // Only reachable if the flag was forced on without the URL; the
-            // honest answer is the one Features would have given.
-            throw ApiException::featureDisabled($this->feature);
-        }
 
         if (trim($sesKey) === '') {
             // Reached when something calls an integration outside a request —
@@ -94,6 +107,14 @@ final class AicountlyClient
             // client refuses to hold.
             throw ApiException::unauthenticated('This action needs your AICOUNTLY session.');
         }
+
+        // Company context travels as cmp_id / fy_id / bo_id query parameters
+        // across the suite — Pulse reads exactly those in
+        // `BaseController::companyContext()`, and a sibling that scopes by
+        // company answers for the wrong one, or for none, without them. They
+        // are whatever arrived on the inbound request: this API does not invent
+        // a company, and an explicit $query entry stays authoritative.
+        $query += CompanyContext::params();
 
         $url = $base . $path . ($query === [] ? '' : '?' . http_build_query($query));
         $payload = $body === null
@@ -162,8 +183,28 @@ final class AicountlyClient
             ));
         }
 
-        // Every AICOUNTLY product wraps its payload in {success, data}; a thin
-        // proxy in front of one may not. Both are read, nothing else is guessed.
+        // Sibling products answer `{status: 1, data}` on success and
+        // `{status: 0, message}` on failure — often with HTTP 200 either way,
+        // which is why the status field has to be read rather than the code.
+        //
+        // Notes' OWN clients get `{success: true, data}`. The two envelopes are
+        // not the same shape and are deliberately not conflated: treating a
+        // `status: 0` refusal as a payload is how a permission denial reaches
+        // the UI as a row of nulls instead of an error.
+        if (array_key_exists('status', $decoded) && is_scalar($decoded['status'])) {
+            if ((int) $decoded['status'] !== 1) {
+                Logger::warn($this->service . '.refused', ['method' => $method, 'status' => $status]);
+                throw ApiException::upstream($this->service, sprintf(
+                    '%s could not answer this request.',
+                    ucfirst($this->service),
+                ));
+            }
+
+            return is_array($decoded['data'] ?? null) ? $decoded['data'] : [];
+        }
+
+        // A thin proxy in front of a product, or one that answers the payload
+        // bare. Both are read; nothing else is guessed.
         return is_array($decoded['data'] ?? null) ? $decoded['data'] : $decoded;
     }
 

@@ -18,8 +18,7 @@ use Aicountly\Api\Support\Str;
  * stays where it belongs and this product never becomes a stale second copy of
  * someone's contacts.
  *
- * With {@see Features::CONTACTS} off — the default, and the state of any
- * deployment without a CONTACTS_API_URL — every method here answers
+ * With {@see Features::CONTACTS} off — the default — every method here answers
  * FEATURE_DISABLED. Nothing returns invented people, and nothing pretends a
  * lookup succeeded: the caller either gets real names from the real directory
  * or is told the directory is not connected.
@@ -48,7 +47,7 @@ final class ContactsIntegrationService
         private readonly AicountlyClient $client = new AicountlyClient(
             'contacts',
             Features::CONTACTS,
-            'CONTACTS_API_URL',
+            'contacts',
         ),
     ) {
     }

@@ -27,8 +27,8 @@ use Aicountly\Api\Support\Str;
  *      a Drive file id must never be treated as a capability on its own.
  *
  * Every method that reaches the network requires {@see Features::DRIVE}, which
- * is off until both NOTES_DRIVE_ENABLED and DRIVE_API_URL are set. An
- * unconfigured deployment gets FEATURE_DISABLED, never a fabricated file.
+ * is off until NOTES_DRIVE_ENABLED is set. An unconfigured deployment gets
+ * FEATURE_DISABLED, never a fabricated file.
  */
 final class DriveAttachmentService
 {
@@ -63,9 +63,17 @@ final class DriveAttachmentService
         };
     }
 
+    /**
+     * Where Drive's API is, `https://drive.aicountly.com/api` in production.
+     *
+     * Resolved through {@see SiblingApi}, so a sandbox deployment reaches
+     * sandbox Drive with nothing configured. Note the host is `drive` while the
+     * product_code Drive stores in its own rows and object keys is `docs` —
+     * SiblingApi keeps the two apart; nothing here should spell either by hand.
+     */
     public static function base(): string
     {
-        return rtrim(Env::get('DRIVE_API_URL'), '/');
+        return SiblingApi::apiBase('drive');
     }
 
     // -----------------------------------------------------------------------

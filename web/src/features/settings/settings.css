@@ -1,0 +1,331 @@
+/* ---------------------------------------------------------------------------
+ * Settings and Help.
+ *
+ * Both are reading pages before they are doing pages, so they use one column at
+ * a comfortable measure rather than the app's three-pane furniture. The two
+ * share a stylesheet because they share a shape: a title, then labelled
+ * sections of prose and small controls.
+ *
+ * Form controls (`.org-select`, `.org-label`) are the shared ones from
+ * features/organise. Every value here is a token from styles/tokens.css.
+ * ------------------------------------------------------------------------- */
+
+.set-page {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--notes-space-8) var(--notes-space-6) var(--notes-space-12);
+}
+
+.set-page__inner {
+  max-width: 46rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-8);
+}
+
+.set-page__title {
+  margin: 0;
+  font-size: var(--notes-text-2xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.set-page__subtitle {
+  margin: var(--notes-space-1) 0 0;
+  max-width: 46ch;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.5;
+}
+.set-page__subtitle a { color: var(--notes-primary); }
+
+/* --- Sections ------------------------------------------------------------- */
+
+.set-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-4);
+  padding-top: var(--notes-space-6);
+  border-top: 1px solid var(--notes-border);
+}
+.set-section:first-of-type { padding-top: 0; border-top: 0; }
+
+.set-section__head { display: flex; flex-direction: column; gap: var(--notes-space-1); }
+
+.set-section__title {
+  margin: 0;
+  font-size: var(--notes-text-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.set-section__description {
+  margin: 0;
+  max-width: 58ch;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.5;
+}
+
+.set-section__body { display: flex; flex-direction: column; gap: var(--notes-space-4); }
+
+.set-hint {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.5;
+}
+.set-hint a { color: var(--notes-primary); }
+
+.set-actions { display: flex; flex-wrap: wrap; gap: var(--notes-space-2); }
+
+/* --- Choices and fields --------------------------------------------------- */
+
+.set-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.set-choice__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.set-choice__option:hover { background: var(--notes-surface-hover); }
+
+/* The radio itself stays visible and does the announcing; the tint is only the
+   glance-level echo of which one is chosen. */
+.set-choice__option:has(input:checked) {
+  border-color: var(--notes-primary-border);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+  font-weight: 600;
+}
+.set-choice__option:focus-within { outline: 2px solid var(--notes-focus-ring); outline-offset: 1px; }
+
+.set-field { display: flex; flex-direction: column; gap: var(--notes-space-1); }
+.set-field__label { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+.set-field .org-select { max-width: 30rem; }
+
+/* --- Capability list ------------------------------------------------------ */
+
+.set-features { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.set-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+}
+
+.set-feature__state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+}
+/* Off is a different icon and a different word as well as a different fill —
+   the state is never carried by colour alone. */
+.set-feature--off { background: var(--notes-surface-secondary); }
+.set-feature--off .set-feature__state { background: var(--notes-surface-hover); color: var(--notes-text-tertiary); }
+
+.set-feature__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.set-feature__name {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  font-size: var(--notes-text-md);
+  font-weight: 600;
+  color: var(--notes-text-primary);
+}
+
+.set-feature__description {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.5;
+}
+
+/* --- Fact lists ----------------------------------------------------------- */
+
+.set-usage { margin: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.set-usage > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--notes-space-2);
+  align-items: baseline;
+  padding-bottom: var(--notes-space-2);
+  border-bottom: 1px solid var(--notes-border);
+}
+.set-usage > div:last-child { padding-bottom: 0; border-bottom: 0; }
+
+.set-usage dt { min-width: 14rem; color: var(--notes-text-secondary); font-size: var(--notes-text-sm); }
+.set-usage dd { margin: 0; color: var(--notes-text-primary); font-size: var(--notes-text-sm); font-weight: 550; }
+
+.set-usage__mono { font-family: var(--notes-font-mono); font-size: var(--notes-text-xs); word-break: break-all; }
+.set-usage__note { color: var(--notes-text-tertiary); font-weight: 400; }
+
+/* --- Shortcuts ------------------------------------------------------------ */
+
+.set-keys { width: 100%; border-collapse: collapse; text-align: left; }
+
+.set-keys__caption {
+  padding-bottom: var(--notes-space-2);
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.set-keys tr { border-bottom: 1px solid var(--notes-border); }
+.set-keys tr:last-child { border-bottom: 0; }
+
+.set-keys__combo {
+  width: 12rem;
+  padding: var(--notes-space-2) var(--notes-space-3) var(--notes-space-2) 0;
+  font-weight: 500;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.set-keys__plus { color: var(--notes-text-tertiary); font-size: var(--notes-text-xs); }
+
+.set-keys__what {
+  padding: var(--notes-space-2) 0;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  vertical-align: top;
+}
+
+.set-keys__note {
+  display: block;
+  margin-top: 2px;
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  line-height: 1.5;
+}
+
+/* Scoped to these pages: a bare `kbd` rule would restyle the header's own
+   shortcut hint and every other one in the app. */
+.set-page kbd {
+  display: inline-block;
+  min-width: 1.5em;
+  padding: 2px 6px;
+  border: 1px solid var(--notes-border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-primary);
+  font-family: var(--notes-font-mono);
+  font-size: var(--notes-text-xs);
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* --- Explainers ----------------------------------------------------------- */
+
+.set-explainer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-4);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+}
+
+.set-explainer__title {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  font-size: var(--notes-text-md);
+  font-weight: 650;
+}
+
+.set-explainer__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+}
+
+.set-explainer__body { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.set-explainer__body p {
+  margin: 0;
+  max-width: 66ch;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.6;
+}
+.set-explainer__body strong { color: var(--notes-text-primary); font-weight: 650; }
+.set-explainer__body a { color: var(--notes-primary); }
+
+.set-explainer__body code {
+  padding: 1px 5px;
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface-secondary);
+  font-family: var(--notes-font-mono);
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-primary);
+}
+
+.set-roles { margin: var(--notes-space-1) 0 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.set-roles > div { display: flex; flex-wrap: wrap; gap: var(--notes-space-2); align-items: baseline; }
+
+.set-roles dt {
+  min-width: 7rem;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  font-weight: 650;
+}
+
+.set-roles dd {
+  flex: 1;
+  min-width: 16rem;
+  margin: 0;
+  max-width: 56ch;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.55;
+}
+
+@media (max-width: 860px) {
+  .set-page { padding: var(--notes-space-4) var(--notes-space-4) var(--notes-space-10); }
+  .set-usage dt { min-width: 0; flex: 1 0 100%; }
+  .set-keys__combo { width: 9rem; }
+}

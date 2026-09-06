@@ -54,7 +54,9 @@ final class ConnectIntegrationService
         private readonly AicountlyClient $client = new AicountlyClient(
             self::SERVICE,
             Features::CONNECT,
-            'CONNECT_API_URL',
+            // Connect's product_code is `chat`; SiblingApi maps either spelling
+            // onto connect.aicountly.com.
+            'connect',
         ),
         private readonly MeetingService $meetings = new MeetingService(),
         private readonly TranscriptService $transcripts = new TranscriptService(),

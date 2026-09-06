@@ -1,21 +1,30 @@
 /**
- * Setting or changing a reminder.
+ * Setting, and changing, when a reminder fires.
  *
- * Three things this dialog refuses to leave implicit:
+ * The dialog is built around one constraint: **the server's RRULE subset is the
+ * whole vocabulary**. `RecurrenceRule::parse()` accepts `FREQ`, `INTERVAL`,
+ * `BYDAY`, `COUNT` and `UNTIL` and rejects everything else at write time rather
+ * than dropping it, so a control for anything outside that list would compose a
+ * 422 the user cannot act on. Every field below maps to one of those five.
  *
- *   - **The timezone.** A reminder is a promise about a wall clock, so the zone
- *     it will be interpreted in is written on screen rather than inferred from
- *     the browser and hoped about.
- *   - **What a repeat actually means.** The rule is summarised in English under
- *     the controls, from the same state that builds the RRULE — so what the
- *     user reads is what gets sent.
- *   - **A rule this builder cannot show.** The server's vocabulary is slightly
- *     wider than these controls (positional weekdays, monthly `BYDAY`). Rather
- *     than round-tripping such a rule into something simpler, the dialog says
- *     it cannot show it and leaves it alone unless the user replaces it.
+ * Three decisions are worth the ink:
+ *
+ *   - **The time zone is stated, not assumed.** A reminder is the one thing
+ *     here where the user's clock and the server's instant have to agree out
+ *     loud, so the zone the rule is anchored to is written under the inputs —
+ *     and when the reminder was made somewhere else, both zones are shown with
+ *     a way to re-home it.
+ *   - **The summary is generated from the same state as the rule.** "Every 2
+ *     weeks on Mon, Wed, until 3 Nov" is the only thing most people read before
+ *     saving; deriving it from the rule string separately is how a summary ends
+ *     up disagreeing with what was sent.
+ *   - **A rule this builder cannot show is not rewritten.** A monthly
+ *     `BYDAY=2TU` reminder made in another calendar keeps its rule untouched
+ *     unless the user deliberately replaces it. Silently flattening it to
+ *     "monthly" would change what the reminder does without saying so.
  */
 
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 import { ApiError } from '../../../shared/api/client'
 import { Icon } from '../../../shared/ui/Icon'
@@ -45,173 +54,231 @@ import {
   toTimeInput,
 } from '../schedule'
 import { useCreateReminder, useUpdateReminder } from '../hooks/useReminders'
-import type { ReminderRow } from '../hooks/useReminders'
+import type { ReminderInput, ReminderRecord } from '../hooks/useReminders'
 import '../reminders.css'
 
 export interface ReminderDialogProps {
   open: boolean
-  /** The note the reminder hangs off. The API creates reminders under a note. */
-  noteId: string
-  /** Shown in the description, so the user can see what they are setting this on. */
-  noteTitle?: string
-  /** The reminder being changed, or null to set a new one. */
-  reminder?: ReminderRow | null
+  /** The note a new reminder hangs off. Required unless `reminder` is given. */
+  noteId?: string
+  /** The reminder being changed. Absent when creating. */
+  reminder?: ReminderRecord | null
+  /** Named in the description, so it is clear which note this is about. */
+  noteTitle?: string | null
   onClose: () => void
-  onSaved?: (reminder: ReminderRow) => void
+  onSaved?: (reminder: ReminderRecord, wasCreated: boolean) => void
 }
 
-interface FormState {
-  date: string
-  time: string
-  repeats: boolean
-  recurrence: Recurrence
-  /** A stored rule the builder has no controls for; kept verbatim until replaced. */
-  customRule: string | null
+/**
+ * The unit a repeat is counted in, for the "Every N ___" control.
+ *
+ * Plural only — the field holds a number, and "every 1 weeks" reads worse than
+ * a label that never changes as you type.
+ */
+const INTERVAL_UNIT: Record<Frequency, string> = {
+  DAILY: 'days',
+  WEEKLY: 'weeks',
+  MONTHLY: 'months',
+  YEARLY: 'years',
 }
 
-function initialState(reminder: ReminderRow | null | undefined, now: Date): FormState {
-  const start = reminder ? new Date(reminder.due_at) : PRESETS[1].at(now)
-  const parsed = parseRule(reminder?.recurrence_rule)
+/** What "after a number of times" starts at. Ten is a quarter's worth of weeks. */
+const DEFAULT_COUNT = 10
 
-  return {
-    date: toDateInput(Number.isNaN(start.getTime()) ? now : start),
-    time: toTimeInput(Number.isNaN(start.getTime()) ? now : start),
-    repeats: Boolean(reminder?.recurrence_rule),
-    recurrence: parsed ?? DEFAULT_RECURRENCE,
-    customRule: reminder?.recurrence_rule && parsed === null ? reminder.recurrence_rule : null,
-  }
+/** Tomorrow at nine: always in the future, whatever time it is now. */
+function defaultWhen(now: Date = new Date()): Date {
+  const date = new Date(now)
+  date.setDate(date.getDate() + 1)
+  date.setHours(9, 0, 0, 0)
+  return date
 }
 
 export function ReminderDialog({
   open,
   noteId,
-  noteTitle,
   reminder = null,
+  noteTitle = null,
   onClose,
   onSaved,
 }: ReminderDialogProps) {
-  const [form, setForm] = useState<FormState>(() => initialState(reminder, new Date()))
-  const [problem, setProblem] = useState<string | null>(null)
-
   const create = useCreateReminder()
   const update = useUpdateReminder()
-  const saving = create.isPending || update.isPending
-  const failure: ApiError | null = create.error ?? update.error
 
   const dateId = useId()
   const timeId = useId()
+  const repeatId = useId()
   const intervalId = useId()
-  const frequencyId = useId()
-  /** Radios need a name that is unique to this dialog, not to the document. */
+  const neverId = useId()
+  const countRadioId = useId()
+  const countId = useId()
+  const untilRadioId = useId()
+  const untilId = useId()
   const endName = useId()
+  const summaryId = useId()
 
-  // Reopening on a different reminder must not show the last one's schedule.
-  // The mutations are fresh objects on every render, so depending on them here
-  // would reset the form on each keystroke rather than once per opening.
+  const [date, setDate] = useState('')
+  const [time, setTime] = useState('')
+  /** null means "does not repeat" — the absence of a rule, not a rule of none. */
+  const [recurrence, setRecurrence] = useState<Recurrence | null>(null)
+  /** A stored rule this builder has no controls for. Kept verbatim until replaced. */
+  const [customRule, setCustomRule] = useState<string | null>(null)
+  const [adoptZone, setAdoptZone] = useState(false)
+  const [error, setError] = useState<unknown>(null)
+
   useEffect(() => {
     if (!open) return
-    setForm(initialState(reminder, new Date()))
-    setProblem(null)
-    create.reset()
-    update.reset()
-  }, [open, reminder?.id])
 
-  const zone = currentTimezone()
-  const due = fromInputs(form.date, form.time)
-  const summary = useMemo(() => describeRecurrence(form.recurrence), [form.recurrence])
+    const when = reminder ? new Date(reminder.due_at) : defaultWhen()
+    setDate(toDateInput(when))
+    setTime(toTimeInput(when))
 
-  const patch = (change: Partial<FormState>) => setForm((current) => ({ ...current, ...change }))
+    const parsed = parseRule(reminder?.recurrence_rule)
+    setRecurrence(parsed)
+    // Non-null rule that would not parse: the builder cannot show it, so it is
+    // held aside rather than approximated.
+    setCustomRule(parsed === null && reminder?.recurrence_rule ? reminder.recurrence_rule : null)
 
-  const patchRecurrence = (change: Partial<Recurrence>) =>
-    setForm((current) => ({ ...current, recurrence: { ...current.recurrence, ...change } }))
+    setAdoptZone(false)
+    setError(null)
+  }, [open, reminder])
 
-  const applyPreset = (at: Date) => {
-    patch({ date: toDateInput(at), time: toTimeInput(at) })
-    setProblem(null)
+  const editing = reminder !== null
+  const busy = create.isPending || update.isPending
+  const fieldErrors = error instanceof ApiError ? error.fieldErrors : {}
+  // A reminder is created under a note, so without one there is nowhere to
+  // POST. Caught here rather than by a request to `/notes//reminders`.
+  const missingNote = !editing && (noteId === undefined || noteId === '')
+
+  const when = fromInputs(date, time)
+  const whenError = when === null ? 'Choose a date and a time.' : null
+  const recurrenceError = recurrence === null ? null : validateRecurrence(recurrence, date)
+  const summary = recurrence === null ? null : describeRecurrence(recurrence)
+
+  const deviceZone = currentTimezone()
+  const storedZone = reminder?.timezone ?? deviceZone
+  const zoneDiffers = editing && storedZone !== deviceZone
+
+  const patchRecurrence = (patch: Partial<Recurrence>) =>
+    setRecurrence((current) => (current === null ? current : { ...current, ...patch }))
+
+  const setFrequency = (value: string) => {
+    if (value === 'NONE') {
+      setRecurrence(null)
+      return
+    }
+    const frequency = value as Frequency
+    setRecurrence((current) => ({
+      ...(current ?? DEFAULT_RECURRENCE),
+      frequency,
+      // Weekdays only mean something on a weekly rule; carrying them into a
+      // monthly one would build `BYDAY` the server reads as "the 2nd Tuesday".
+      byDay: supportsWeekdays(frequency) ? (current?.byDay ?? []) : [],
+    }))
   }
 
   const toggleWeekday = (token: WeekdayToken) =>
-    setForm((current) => {
-      const selected = current.recurrence.byDay.includes(token)
-      return {
-        ...current,
-        recurrence: {
-          ...current.recurrence,
-          byDay: selected
-            ? current.recurrence.byDay.filter((day) => day !== token)
-            : [...current.recurrence.byDay, token],
-        },
-      }
+    patchRecurrence({
+      byDay: recurrence?.byDay.includes(token)
+        ? recurrence.byDay.filter((day) => day !== token)
+        : [...(recurrence?.byDay ?? []), token],
     })
 
   const setEnd = (end: EndCondition) => patchRecurrence({ end })
 
-  const save = async () => {
-    setProblem(null)
+  const submit = () => {
+    if (when === null || recurrenceError !== null || missingNote || busy) return
+    setError(null)
 
-    if (!due) {
-      setProblem('Choose a date and a time for this reminder.')
+    // Omitted, not null, when the rule is one this builder cannot show: the
+    // server leaves an absent `recurrence_rule` alone and re-resolves it
+    // against the new due date, which is exactly what "keep it" means.
+    const rule: Pick<ReminderInput, 'recurrence_rule'> =
+      customRule !== null ? {} : { recurrence_rule: recurrence === null ? null : buildRule(recurrence) }
+
+    let work: Promise<ReminderRecord>
+    if (reminder !== null) {
+      work = update.mutateAsync({
+        id: reminder.id,
+        due_at: when.toISOString(),
+        ...rule,
+        ...(adoptZone ? { timezone: deviceZone } : {}),
+        // Choosing a new time puts a reminder back in the queue. Without this
+        // a snoozed one keeps its `snoozed_until` and still fires at the old
+        // moment, and a completed one is rescheduled while staying completed —
+        // both of which look like the new time was ignored.
+        ...(reminder.status === 'scheduled' ? {} : ({ status: 'scheduled' } as const)),
+      })
+    } else if (noteId !== undefined && noteId !== '') {
+      work = create.mutateAsync({
+        noteId,
+        due_at: when.toISOString(),
+        timezone: deviceZone,
+        ...rule,
+      })
+    } else {
       return
     }
 
-    let rule: string | null = null
-    if (form.repeats) {
-      if (form.customRule) {
-        rule = form.customRule
-      } else {
-        const invalid = validateRecurrence(form.recurrence, form.date)
-        if (invalid) {
-          setProblem(invalid)
-          return
-        }
-        rule = buildRule(form.recurrence)
-      }
-    }
-
-    const body = { due_at: due.toISOString(), timezone: zone, recurrence_rule: rule }
-
-    try {
-      const saved = reminder
-        ? await update.mutateAsync({ id: reminder.id, ...body })
-        : await create.mutateAsync({ noteId, ...body })
-
-      onSaved?.(saved)
-      onClose()
-    } catch {
-      // Rendered from the mutation's own error below, with the server's words.
-    }
+    work
+      .then((saved) => {
+        onSaved?.(saved, !editing)
+        onClose()
+      })
+      .catch(setError)
   }
-
-  const fieldErrors = failure?.fieldErrors ?? {}
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title={reminder ? 'Reschedule reminder' : 'Set a reminder'}
+      title={editing ? 'Edit reminder' : 'Set a reminder'}
       description={noteTitle ? `On “${noteTitle}”.` : undefined}
       width={560}
       footer={
         <>
-          <Button onClick={onClose} disabled={saving}>
+          <Button onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" icon="bell" loading={saving} onClick={() => void save()}>
-            {reminder ? 'Save changes' : 'Set reminder'}
+          <Button
+            variant="primary"
+            icon="check"
+            loading={busy}
+            disabled={whenError !== null || recurrenceError !== null || missingNote}
+            onClick={submit}
+          >
+            {editing ? 'Save reminder' : 'Set reminder'}
           </Button>
         </>
       }
     >
-      <div className="reminder-form">
-        <div className="reminder-form__presets" role="group" aria-label="Quick times">
+      <div className="org-form">
+        {error && Object.keys(fieldErrors).length === 0 ? <ErrorNotice error={error} /> : null}
+
+        {missingNote ? (
+          <p className="org-error" role="alert">
+            A reminder hangs off a note, and this dialog was opened without one — so there is nothing to save it
+            against. Open the note you want to be reminded about and set it from there.
+          </p>
+        ) : null}
+
+        <div className="rem-presets" role="group" aria-label="Common times">
           {PRESETS.map((preset) => (
-            <Button key={preset.key} size="sm" onClick={() => applyPreset(preset.at(new Date()))}>
+            <Button
+              key={preset.key}
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                const at = preset.at(new Date())
+                setDate(toDateInput(at))
+                setTime(toTimeInput(at))
+              }}
+            >
               {preset.label}
             </Button>
           ))}
         </div>
 
-        <div className="reminder-form__when">
+        <div className="rem-when">
           <div className="org-field">
             <label className="org-label" htmlFor={dateId}>
               Date
@@ -220,13 +287,14 @@ export function ReminderDialog({
               id={dateId}
               className="org-input"
               type="date"
-              data-autofocus
-              value={form.date}
-              aria-invalid={fieldErrors.due_at !== undefined || undefined}
-              onChange={(event) => patch({ date: event.target.value })}
+              value={date}
+              required
+              disabled={busy}
+              data-autofocus=""
+              aria-invalid={whenError !== null || fieldErrors.due_at !== undefined}
+              onChange={(event) => setDate(event.target.value)}
             />
           </div>
-
           <div className="org-field">
             <label className="org-label" htmlFor={timeId}>
               Time
@@ -235,205 +303,283 @@ export function ReminderDialog({
               id={timeId}
               className="org-input"
               type="time"
-              value={form.time}
-              onChange={(event) => patch({ time: event.target.value })}
+              value={time}
+              required
+              disabled={busy}
+              aria-invalid={whenError !== null || fieldErrors.due_at !== undefined}
+              onChange={(event) => setTime(event.target.value)}
             />
           </div>
         </div>
 
-        {/* The zone is not a setting here — it is a statement of how the time
-            above will be read, which is the thing that goes wrong silently. */}
-        <p className="reminder-form__zone">
-          <Icon name="info" size={14} />
-          Times are in {describeTimezone(zone)}
-          {due ? ` — this one fires ${formatWhen(due.toISOString()).toLowerCase()}` : ''}.
-        </p>
-
+        {whenError !== null ? (
+          <p className="org-error" role="alert">
+            {whenError}
+          </p>
+        ) : null}
         {fieldErrors.due_at ? (
           <p className="org-error" role="alert">
             {fieldErrors.due_at}
           </p>
         ) : null}
 
-        <fieldset className="reminder-repeat">
-          <legend className="reminder-repeat__legend">Repeat</legend>
-
-          <label className="reminder-repeat__toggle">
-            <input
-              type="checkbox"
-              checked={form.repeats}
-              onChange={(event) => patch({ repeats: event.target.checked })}
-            />
-            <span>Repeat this reminder</span>
-          </label>
-
-          {form.repeats && form.customRule ? (
-            <div className="reminder-repeat__custom">
-              <p className="org-hint">
-                This reminder repeats on a schedule these controls cannot show
-                (<code>{form.customRule}</code>). It is left exactly as it is unless you replace it.
-              </p>
-              <Button
-                size="sm"
-                onClick={() => patch({ customRule: null, recurrence: DEFAULT_RECURRENCE })}
-              >
-                Replace with a simple repeat
-              </Button>
-            </div>
-          ) : null}
-
-          {form.repeats && !form.customRule ? (
-            <div className="reminder-repeat__builder">
-              <div className="reminder-repeat__cadence">
-                <label className="org-label" htmlFor={intervalId}>
-                  Every
-                </label>
-                <input
-                  id={intervalId}
-                  className="org-input reminder-repeat__interval"
-                  type="number"
-                  min={1}
-                  max={MAX_INTERVAL}
-                  step={1}
-                  value={form.recurrence.interval}
-                  onChange={(event) =>
-                    patchRecurrence({ interval: Number(event.target.value) || 1 })
-                  }
-                />
-
-                <label className="sr-only" htmlFor={frequencyId}>
-                  Frequency
-                </label>
-                <select
-                  id={frequencyId}
-                  className="org-select"
-                  value={form.recurrence.frequency}
-                  onChange={(event) => {
-                    const frequency = event.target.value as Frequency
-                    // Weekdays only mean something weekly; carrying a stale
-                    // selection into a monthly rule would build a rule the
-                    // server refuses.
-                    patchRecurrence({
-                      frequency,
-                      byDay: supportsWeekdays(frequency) ? form.recurrence.byDay : [],
-                    })
-                  }}
-                >
-                  {FREQUENCIES.map((frequency) => (
-                    <option key={frequency} value={frequency}>
-                      {FREQUENCY_LABEL[frequency]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {supportsWeekdays(form.recurrence.frequency) ? (
-                <div className="reminder-repeat__days" role="group" aria-label="Days of the week">
-                  {WEEKDAYS.map((day) => {
-                    const selected = form.recurrence.byDay.includes(day.token)
-                    return (
-                      <button
-                        key={day.token}
-                        type="button"
-                        className="reminder-day"
-                        aria-pressed={selected}
-                        aria-label={day.long}
-                        onClick={() => toggleWeekday(day.token)}
-                      >
-                        {day.short}
-                      </button>
-                    )
-                  })}
-                </div>
-              ) : null}
-
-              {/* One control per label: the number and date fields sit beside
-                  their radio rather than inside its label, so a screen reader
-                  is not told that "After" names two different inputs. */}
-              <fieldset className="reminder-repeat__end">
-                <legend className="org-label">Ends</legend>
-
-                <div className="reminder-repeat__option">
-                  <label>
-                    <input
-                      type="radio"
-                      name={endName}
-                      checked={form.recurrence.end.kind === 'never'}
-                      onChange={() => setEnd({ kind: 'never' })}
-                    />
-                    <span>Never</span>
-                  </label>
-                </div>
-
-                <div className="reminder-repeat__option">
-                  <label>
-                    <input
-                      type="radio"
-                      name={endName}
-                      checked={form.recurrence.end.kind === 'count'}
-                      onChange={() => setEnd({ kind: 'count', count: 10 })}
-                    />
-                    <span>After</span>
-                  </label>
-                  <input
-                    className="org-input reminder-repeat__count"
-                    type="number"
-                    min={1}
-                    max={MAX_COUNT}
-                    step={1}
-                    aria-label="Number of times"
-                    disabled={form.recurrence.end.kind !== 'count'}
-                    value={form.recurrence.end.kind === 'count' ? form.recurrence.end.count : 10}
-                    onChange={(event) => setEnd({ kind: 'count', count: Number(event.target.value) || 1 })}
-                  />
-                  <span>times</span>
-                </div>
-
-                <div className="reminder-repeat__option">
-                  <label>
-                    <input
-                      type="radio"
-                      name={endName}
-                      checked={form.recurrence.end.kind === 'until'}
-                      onChange={() => setEnd({ kind: 'until', date: form.date })}
-                    />
-                    <span>On</span>
-                  </label>
-                  <input
-                    className="org-input"
-                    type="date"
-                    aria-label="Last date"
-                    disabled={form.recurrence.end.kind !== 'until'}
-                    value={form.recurrence.end.kind === 'until' ? form.recurrence.end.date : ''}
-                    onChange={(event) => setEnd({ kind: 'until', date: event.target.value })}
-                  />
-                </div>
-              </fieldset>
-
-              {/* Built from the same state as the rule itself, so it cannot
-                  describe something other than what is sent. */}
-              <p className="reminder-repeat__summary">
-                <Icon name="refresh" size={14} />
-                {summary}
-              </p>
-            </div>
-          ) : null}
-        </fieldset>
-
-        {problem ? (
-          <p className="org-error" role="alert">
-            {problem}
+        {when !== null ? (
+          <p className="rem-preview">
+            <Icon name="bell" size={14} />
+            <span>{formatWhen(when.toISOString())}</span>
+            {when.getTime() <= Date.now() ? (
+              <span className="rem-preview__note">— already passed, so it will show as overdue</span>
+            ) : null}
           </p>
         ) : null}
+
+        <ZoneNote
+          deviceZone={deviceZone}
+          storedZone={storedZone}
+          differs={zoneDiffers}
+          adopt={adoptZone}
+          disabled={busy}
+          onAdoptChange={setAdoptZone}
+        />
+
+        {customRule !== null ? (
+          <div className="org-notice org-notice--info" role="status">
+            <Icon name="info" size={15} className="org-notice__icon" />
+            <div className="org-notice__body">
+              This reminder repeats on a schedule this form cannot show (<code>{customRule}</code>). Saving keeps
+              it exactly as it is.
+              <div className="org-notice__actions">
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    setCustomRule(null)
+                    setRecurrence(DEFAULT_RECURRENCE)
+                  }}
+                >
+                  Replace it
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="org-field">
+              <label className="org-label" htmlFor={repeatId}>
+                Repeat
+              </label>
+              <select
+                id={repeatId}
+                className="org-select"
+                value={recurrence?.frequency ?? 'NONE'}
+                disabled={busy}
+                onChange={(event) => setFrequency(event.target.value)}
+              >
+                <option value="NONE">Does not repeat</option>
+                {FREQUENCIES.map((frequency) => (
+                  <option key={frequency} value={frequency}>
+                    {FREQUENCY_LABEL[frequency]}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {recurrence !== null ? (
+              <div className="rem-repeat">
+                <div className="org-field rem-interval">
+                  <label className="org-label" htmlFor={intervalId}>
+                    Every
+                  </label>
+                  <div className="rem-interval__row">
+                    <input
+                      id={intervalId}
+                      className="org-input"
+                      type="number"
+                      min={1}
+                      max={MAX_INTERVAL}
+                      value={recurrence.interval}
+                      disabled={busy}
+                      aria-describedby={summaryId}
+                      onChange={(event) => patchRecurrence({ interval: Number(event.target.value) })}
+                    />
+                    <span className="rem-interval__unit">{INTERVAL_UNIT[recurrence.frequency]}</span>
+                  </div>
+                </div>
+
+                {supportsWeekdays(recurrence.frequency) ? (
+                  <fieldset className="rem-fieldset">
+                    <legend className="org-label">On these days</legend>
+                    <div className="rem-days">
+                      {WEEKDAYS.map((day) => (
+                        <button
+                          key={day.token}
+                          type="button"
+                          className="rem-day"
+                          aria-pressed={recurrence.byDay.includes(day.token)}
+                          aria-label={day.long}
+                          disabled={busy}
+                          onClick={() => toggleWeekday(day.token)}
+                        >
+                          {day.short}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="org-hint">
+                      {recurrence.byDay.length === 0
+                        ? 'No day chosen, so it repeats on the same weekday as the date above.'
+                        : 'Chosen days are ticked; the rest are not.'}
+                    </p>
+                  </fieldset>
+                ) : null}
+
+                <fieldset className="rem-fieldset">
+                  <legend className="org-label">Ends</legend>
+                  {/* The radio and the number beside it are separate controls
+                      with separate labels: a <label> wrapping both would give
+                      its text to one of them and leave the other unnamed. */}
+                  <div className="rem-end">
+                    <div className="rem-end__option">
+                      <input
+                        id={neverId}
+                        type="radio"
+                        name={endName}
+                        checked={recurrence.end.kind === 'never'}
+                        disabled={busy}
+                        onChange={() => setEnd({ kind: 'never' })}
+                      />
+                      <label htmlFor={neverId}>Never</label>
+                    </div>
+
+                    <div className="rem-end__option">
+                      <input
+                        id={countRadioId}
+                        type="radio"
+                        name={endName}
+                        checked={recurrence.end.kind === 'count'}
+                        disabled={busy}
+                        onChange={() => setEnd({ kind: 'count', count: DEFAULT_COUNT })}
+                      />
+                      <label htmlFor={countRadioId}>After a number of times</label>
+                      <input
+                        id={countId}
+                        className="org-input rem-end__number"
+                        type="number"
+                        min={1}
+                        max={MAX_COUNT}
+                        aria-label="Number of times"
+                        value={recurrence.end.kind === 'count' ? recurrence.end.count : ''}
+                        disabled={busy || recurrence.end.kind !== 'count'}
+                        onChange={(event) => setEnd({ kind: 'count', count: Number(event.target.value) })}
+                      />
+                    </div>
+
+                    <div className="rem-end__option">
+                      <input
+                        id={untilRadioId}
+                        type="radio"
+                        name={endName}
+                        checked={recurrence.end.kind === 'until'}
+                        disabled={busy}
+                        onChange={() => setEnd({ kind: 'until', date })}
+                      />
+                      <label htmlFor={untilRadioId}>On a date</label>
+                      <input
+                        id={untilId}
+                        className="org-input rem-end__date"
+                        type="date"
+                        aria-label="Last date"
+                        value={recurrence.end.kind === 'until' ? recurrence.end.date : ''}
+                        disabled={busy || recurrence.end.kind !== 'until'}
+                        onChange={(event) => setEnd({ kind: 'until', date: event.target.value })}
+                      />
+                    </div>
+                  </div>
+
+                  {/* The server has one timestamp column for a reminder and
+                      nowhere to record how many occurrences have fired, so it
+                      resolves COUNT into the equivalent UNTIL when it saves.
+                      Saying so here stops "after 10 times" coming back as a
+                      date and reading like a bug. */}
+                  {recurrence.end.kind === 'count' ? (
+                    <p className="org-hint">
+                      Saved as the date occurrence {recurrence.end.count} falls on, so it stays right however
+                      often this reminder is later moved.
+                    </p>
+                  ) : null}
+                </fieldset>
+
+                <p className="rem-summary" id={summaryId} aria-live="polite">
+                  <Icon name="refresh" size={14} />
+                  <span>{summary}</span>
+                </p>
+
+                {recurrenceError !== null ? (
+                  <p className="org-error" role="alert">
+                    {recurrenceError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        )}
 
         {fieldErrors.recurrence_rule ? (
           <p className="org-error" role="alert">
             {fieldErrors.recurrence_rule}
           </p>
         ) : null}
-
-        {failure && Object.keys(fieldErrors).length === 0 ? <ErrorNotice error={failure} /> : null}
       </div>
     </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Time zone
+// ---------------------------------------------------------------------------
+
+/**
+ * Which clock this reminder is kept on.
+ *
+ * Always stated, because "09:00" means nothing without it. When the reminder
+ * was made in another zone the two are shown side by side with a checkbox to
+ * move it: changing the zone re-homes future occurrences and leaves this one
+ * exactly where it is, which is worth spelling out rather than leaving people
+ * to discover.
+ */
+function ZoneNote({
+  deviceZone,
+  storedZone,
+  differs,
+  adopt,
+  disabled,
+  onAdoptChange,
+}: {
+  deviceZone: string
+  storedZone: string
+  differs: boolean
+  adopt: boolean
+  disabled: boolean
+  onAdoptChange: (value: boolean) => void
+}) {
+  if (!differs) {
+    return <p className="org-hint">Times are in {describeTimezone(deviceZone)}, this device’s time zone.</p>
+  }
+
+  return (
+    <div className="rem-zone">
+      <p className="org-hint">
+        This reminder is kept on {describeTimezone(storedZone)}. This device is on{' '}
+        {describeTimezone(deviceZone)}.
+      </p>
+      <label className="rem-zone__adopt">
+        <input
+          type="checkbox"
+          checked={adopt}
+          disabled={disabled}
+          onChange={(event) => onAdoptChange(event.target.checked)}
+        />
+        <span>Move it to {deviceZone}. The time above does not change — only where future repeats fall.</span>
+      </label>
+    </div>
   )
 }

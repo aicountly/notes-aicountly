@@ -648,6 +648,9 @@ export interface NoteCardProps {
 export function NoteCard({ note, to, selected = false, onRemoved }: NoteCardProps) {
   const flag = useNoteFlag()
   const config = useAppConfig()
+  // A pin that silently rolls back is indistinguishable from one that never
+  // registered the click, so the reason the server gave is shown on the card.
+  const [flagError, setFlagError] = useState<string | null>(null)
   const capabilities = capabilitiesForRole(note.role)
   const typeIcon = TYPE_ICON[note.note_type]
   const checklist = note.checklist
@@ -676,12 +679,25 @@ export function NoteCard({ note, to, selected = false, onRemoved }: NoteCardProp
             className={`note-card__pin ${note.is_pinned ? 'note-card__pin--active' : ''}`.trim()}
             aria-pressed={note.is_pinned}
             aria-label={note.is_pinned ? `Unpin ${note.display_title}` : `Pin ${note.display_title}`}
-            onClick={() => flag.mutate({ id: note.id, action: note.is_pinned ? 'unpin' : 'pin' })}
+            onClick={() => {
+              setFlagError(null)
+              flag.mutate(
+                { id: note.id, action: note.is_pinned ? 'unpin' : 'pin' },
+                { onError: (reason: unknown) => setFlagError(describeError(reason)) },
+              )
+            }}
           >
             <Icon name={note.is_pinned ? 'pin-filled' : 'pin'} size={15} />
           </button>
         ) : null}
       </div>
+
+      {flagError ? (
+        <p className="note-card__error" role="alert">
+          <Icon name="alert" size={13} />
+          {flagError}
+        </p>
+      ) : null}
 
       {note.excerpt ? <p className="note-card__excerpt">{note.excerpt}</p> : null}
 

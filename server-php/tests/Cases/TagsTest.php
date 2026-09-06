@@ -179,6 +179,47 @@ final class TagsTest extends TestCase
         }
     }
 
+    /**
+     * The same source twice is one merge, not a failure.
+     *
+     * The merge consumes each source in turn, so a repeated id used to find the
+     * tag already gone on the second pass, answer 404 about a tag sitting in
+     * the caller's own list, and roll the whole thing back — leaving the user
+     * with the two labels they asked to fold together and a message saying one
+     * of them does not exist.
+     */
+    public function testARepeatedSourceIsMergedOnceRatherThanFailing(): void
+    {
+        $note = $this->note($this->alice, 'quarterly filing', ['gst', 'taxes']);
+        $gst = $this->tag($this->alice, 'gst');
+        $taxes = $this->tag($this->alice, 'taxes');
+
+        $merged = $this->alice->post('/tags/merge', [
+            'source_ids' => [$gst['id'], $gst['id']],
+            'target_id' => $taxes['id'],
+        ]);
+
+        $this->assertSame(200, $merged['status']);
+        $this->assertSame($taxes['id'], $merged['body']['data']['id']);
+        $this->assertCount(1, $this->alice->get('/tags')['body']['data'], 'the two labels really did fold into one');
+        $this->assertSame(['taxes'], $this->noteTags($this->alice, $note['id']));
+    }
+
+    /** An unbounded source list is a client fault, not a merge. */
+    public function testAnAbsurdlyLongMergeIsRefused(): void
+    {
+        $target = $this->alice->post('/tags', ['name' => 'taxes'])['body']['data'];
+
+        $tooMany = $this->alice->post('/tags/merge', [
+            'source_ids' => array_map(static fn () => Uuid::v4(), range(1, 101)),
+            'target_id' => $target['id'],
+        ]);
+
+        $this->assertSame(422, $tooMany['status']);
+        $this->assertSame('VALIDATION_FAILED', $tooMany['body']['error']['code']);
+        $this->assertCount(1, $this->alice->get('/tags')['body']['data']);
+    }
+
     public function testMergeNeedsSomethingToMerge(): void
     {
         $target = $this->alice->post('/tags', ['name' => 'taxes'])['body']['data'];

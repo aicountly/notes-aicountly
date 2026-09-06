@@ -20,6 +20,7 @@ import { Button, Skeleton } from '../../../shared/ui/primitives'
 import { ApiError, api } from '../../../shared/api/client'
 import { queryKeys } from '../../../shared/query/queryClient'
 import { useAuth } from '../../../auth/AuthProvider'
+import { attachmentContentUrl } from '../../attachments/hooks/useAttachments'
 import { formatAbsoluteTime, formatRelativeTime } from './NoteCard'
 import type {
   ActivityEntry,
@@ -157,7 +158,15 @@ export function NoteInfoPanel({ note, onClose }: NoteInfoPanelProps) {
             <ul className="info-list">
               {(attachments.data ?? []).map((attachment) => (
                 <li key={attachment.id}>
-                  <a className="info-link" href={attachment.content_url} target="_blank" rel="noreferrer">
+                  {/* `content_url` is relative to the API root, not to this
+                      origin: linked raw it lands on the SPA's catch-all route
+                      instead of the file. */}
+                  <a
+                    className="info-link"
+                    href={attachmentContentUrl(attachment)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     <Icon name="attach" size={14} />
                     <span className="info-link__label">{attachment.filename}</span>
                   </a>

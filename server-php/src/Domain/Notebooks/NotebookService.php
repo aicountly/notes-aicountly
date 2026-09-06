@@ -136,7 +136,7 @@ final class NotebookService
         }
 
         $name = $this->name($input['name'] ?? null);
-        $parent = $this->resolveParent($identity, $input['parent_id'] ?? null);
+        $parent = $this->resolveParent($identity, $input['parent_id'] ?? null, $identity->tenantId);
         $depth = $parent === null ? 0 : (int) $parent['depth'] + 1;
 
         if ($depth > self::MAX_DEPTH - 1) {
@@ -208,6 +208,20 @@ final class NotebookService
             $notebook = $this->permissions->requireNotebook($identity, $notebookId, NotePermissionService::EDIT);
         }
 
+        if (array_key_exists('position', $input)) {
+            // Reordering is owner-only, and not for tidiness: `reposition()`
+            // renumbers *every* sibling the owner has under that parent, and at
+            // the root level those siblings include notebooks the caller was
+            // never shared on. Left at edit rights, one share on one notebook
+            // let a guest rewrite the owner's whole sidebar order and stamp
+            // their own id into `updated_by` on notebooks they cannot see.
+            //
+            // Checked here rather than at the reposition call below, so a PATCH
+            // that carries both a rename and a position is refused whole
+            // instead of applying the rename and then failing.
+            $this->permissions->requireNotebook($identity, $notebookId, NotePermissionService::MANAGE);
+        }
+
         $updates = [];
         $bindings = ['id' => $notebookId, 'actor' => $identity->userId];
 
@@ -243,7 +257,7 @@ final class NotebookService
             // Archiving hides the whole branch from everyone it is shared with,
             // so it is the owner's call, not an editor's.
             $this->permissions->requireNotebook($identity, $notebookId, NotePermissionService::MANAGE);
-            $archived = (bool) $input['is_archived'];
+            $archived = $this->flag($input['is_archived'], 'is_archived');
             $archiveChange = $archived === (bool) $notebook['is_archived'] ? null : $archived;
             $updates[] = 'is_archived = :is_archived';
             $bindings['is_archived'] = $archived;
@@ -313,7 +327,12 @@ final class NotebookService
             ]);
         }
 
-        $parent = $this->resolveParent($identity, $input['parent_id'], $notebookId);
+        $parent = $this->resolveParent(
+            $identity,
+            $input['parent_id'],
+            self::nullableString($notebook['tenant_id'] ?? null),
+            $notebookId,
+        );
         $parentId = $parent === null ? null : (string) $parent['id'];
         $newDepth = $parent === null ? 0 : (int) $parent['depth'] + 1;
 
@@ -445,6 +464,18 @@ final class NotebookService
                 ['id' => $notebookId],
             );
 
+            // Marked deleted before the children are rehomed, not after. The
+            // free-name search below only considers live notebooks, and this
+            // one is on its way out: leaving it live made a child that shares
+            // its parent's name collide with the very row being deleted, so
+            // deleting "Work" containing "Work" left the user with a single
+            // notebook oddly called "Work (2)" and no "Work" anywhere.
+            Connection::execute(
+                'UPDATE notebooks SET deleted_at = now(), updated_by = :actor, updated_at = now()
+                 WHERE id = :id::uuid AND deleted_at IS NULL',
+                ['id' => $notebookId, 'actor' => $identity->userId],
+            );
+
             foreach ($children as $child) {
                 // A notebook at the destination may already own this name. The
                 // delete must not fail on that, and merging two notebooks by
@@ -476,18 +507,10 @@ final class NotebookService
             // changed, and touching it would push every one of them to the top
             // of "recently updated" — deleting a folder of 200 notes would
             // rewrite the user's most useful list.
-            $moved = Connection::execute(
+            return Connection::execute(
                 'UPDATE notes SET notebook_id = :parent::uuid WHERE notebook_id = :id::uuid',
                 ['id' => $notebookId, 'parent' => $parentId],
             );
-
-            Connection::execute(
-                'UPDATE notebooks SET deleted_at = now(), updated_by = :actor, updated_at = now()
-                 WHERE id = :id::uuid AND deleted_at IS NULL',
-                ['id' => $notebookId, 'actor' => $identity->userId],
-            );
-
-            return $moved;
         });
 
         $this->activity->record($identity, self::ACTIVITY_DELETED, null, null, [
@@ -581,13 +604,25 @@ final class NotebookService
             throw ApiException::badRequest('The owner already has full access to this notebook.');
         }
 
-        // Matched exactly, the way the unique constraint the upsert below
-        // targets matches: anything looser would report a role change and then
-        // insert a second grant.
+        // Matched case-insensitively, the way removeMember matches — and the
+        // way the owner comparison just above matches. An exact match here was
+        // a hole with teeth: "user-b" already an editor, POST "USER-B" as
+        // viewer, and the exact lookup found nothing, so the upsert's ON
+        // CONFLICT (notebook_id, user_id) missed too and a *second* grant row
+        // was inserted. The endpoint answered 201 "member added, role viewer"
+        // while the editor row it was meant to replace stayed put — a
+        // downgrade the owner is told succeeded and which never happened.
+        //
+        // The row that already exists therefore decides which spelling is
+        // written, so the conflict target can actually fire.
         $existing = Connection::selectOne(
-            'SELECT role FROM notebook_members WHERE notebook_id = :id::uuid AND user_id = :user',
+            'SELECT user_id, role FROM notebook_members
+             WHERE notebook_id = :id::uuid AND lower(user_id) = lower(:user)',
             ['id' => $notebookId, 'user' => $userId],
         );
+        if ($existing !== null) {
+            $userId = (string) $existing['user_id'];
+        }
 
         Connection::execute(
             'INSERT INTO notebook_members (id, notebook_id, user_id, role, invited_by)
@@ -860,10 +895,28 @@ final class NotebookService
      * inside your folder that you cannot see. Notes are the thing that files
      * into a shared notebook; they cascade, so they stay visible.
      *
+     * The tenant is the same rule along the other axis, and it has to be
+     * stated separately because the read gate is deliberately asymmetric: a
+     * personal notebook (`tenant_id IS NULL`) is visible from inside *every*
+     * company, so a parent that passes {@see NotePermissionService} can still
+     * belong to a different context than the child. Left unchecked, filing a
+     * company notebook under a personal one produced the same folder nobody
+     * can see — the branch is there in the company context and gone in the
+     * personal one — and moving a personal notebook under a company one made
+     * the same notebook appear in two different places depending on which
+     * company the user happened to be acting in. The child's context is the
+     * one that must match, which is the caller's on a create and the
+     * notebook's own on a move.
+     *
+     * @param ?string $tenantId The tenant the child belongs to.
      * @return array<string, mixed>|null
      */
-    private function resolveParent(Identity $identity, mixed $parentId, ?string $movingId = null): ?array
-    {
+    private function resolveParent(
+        Identity $identity,
+        mixed $parentId,
+        ?string $tenantId,
+        ?string $movingId = null,
+    ): ?array {
         if ($parentId === null || $parentId === '') {
             return null;
         }
@@ -885,6 +938,13 @@ final class NotebookService
             throw ApiException::forbidden(
                 'NOTEBOOK_ACCESS_DENIED',
                 'Only the owner of a notebook can put sub-notebooks inside it.',
+            );
+        }
+
+        if (self::nullableString($parent['tenant_id'] ?? null) !== $tenantId) {
+            throw ApiException::forbidden(
+                'NOTEBOOK_ACCESS_DENIED',
+                'A notebook and the one it sits inside have to belong to the same company.',
             );
         }
 
@@ -910,6 +970,12 @@ final class NotebookService
      * siblings are re-sequenced 0..n-1 around it. Storing the raw number
      * instead would leave two siblings sharing a position and the sidebar
      * flipping between two orders from one reload to the next.
+     *
+     * That re-sequencing is exactly why the caller must be the owner: the
+     * siblings are selected by `owner_user_id`, not by what the caller may see,
+     * so anyone else running this would be writing to rows they have no grant
+     * on. Every call site checks first; this is the backstop that keeps the
+     * invariant true if a new one ever forgets.
      */
     private function reposition(
         Identity $identity,
@@ -918,6 +984,13 @@ final class NotebookService
         ?string $parentId,
         int $index,
     ): void {
+        if ($owner !== $identity->userId) {
+            throw ApiException::forbidden(
+                'NOTEBOOK_ACCESS_DENIED',
+                'Only the owner can reorder their notebooks.',
+            );
+        }
+
         $siblings = Connection::select(
             'SELECT id FROM notebooks
              WHERE owner_user_id = :owner AND deleted_at IS NULL
@@ -1027,24 +1100,35 @@ final class NotebookService
         return Str::limit($name, self::MAX_NAME);
     }
 
-    private function description(mixed $value): ?string
+    /**
+     * Optional free text: null or "" clears it.
+     *
+     * A value that is neither is a mistake, and it is reported rather than
+     * folded to null — quietly treating `{"description": {...}}` as "clear the
+     * description" turned a malformed PATCH into silent data loss, and answered
+     * 200 while doing it.
+     */
+    private function optionalText(mixed $value, int $max, string $field): ?string
     {
-        if ($value === null || !is_scalar($value)) {
+        if ($value === null) {
             return null;
         }
-        $description = trim((string) $value);
+        if (!is_scalar($value)) {
+            throw ApiException::validation([$field => 'That needs to be text.']);
+        }
+        $text = trim((string) $value);
 
-        return $description === '' ? null : Str::limit($description, self::MAX_DESCRIPTION);
+        return $text === '' ? null : Str::limit($text, $max);
+    }
+
+    private function description(mixed $value): ?string
+    {
+        return $this->optionalText($value, self::MAX_DESCRIPTION, 'description');
     }
 
     private function icon(mixed $value): ?string
     {
-        if ($value === null || !is_scalar($value)) {
-            return null;
-        }
-        $icon = trim((string) $value);
-
-        return $icon === '' ? null : Str::limit($icon, self::MAX_ICON);
+        return $this->optionalText($value, self::MAX_ICON, 'icon');
     }
 
     /**
@@ -1065,6 +1149,35 @@ final class NotebookService
         }
 
         return $color;
+    }
+
+    /**
+     * A boolean the client actually meant.
+     *
+     * PHP's cast is the wrong tool here: `(bool) 'false'` is `true`, and so is
+     * `(bool) 'no'` and `(bool) 'off'`. Archiving hides a whole branch from
+     * everyone it is shared with, so the one value that must never be read as
+     * "yes" is a client saying "no". Anything outside the vocabulary
+     * {@see \Aicountly\Api\Http\Request::bool()} already speaks is a mistake
+     * worth reporting rather than guessing at.
+     */
+    private function flag(mixed $value, string $field): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if ($value === null) {
+            return false;
+        }
+        if (!is_scalar($value)) {
+            throw ApiException::validation([$field => 'Send true or false.']);
+        }
+
+        return match (strtolower(trim((string) $value))) {
+            '1', 'true', 'yes', 'on' => true,
+            '0', 'false', 'no', 'off', '' => false,
+            default => throw ApiException::validation([$field => 'Send true or false.']),
+        };
     }
 
     private function position(mixed $value): int

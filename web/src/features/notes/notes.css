@@ -64,6 +64,20 @@ ul.notes-list { list-style: none; margin: 0; padding: 0; }
   color: var(--notes-text-tertiary);
 }
 
+/* A refused pin rolls its icon back on its own; this says why. Above the
+   stretched link, or the message would be a click target for the note. */
+.note-card__error {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-1);
+  margin: 0;
+  font-size: var(--notes-text-xs);
+  line-height: 1.45;
+  color: var(--notes-danger);
+}
+
 /* --- The "…" menu --------------------------------------------------------- */
 
 .note-menu { position: relative; display: inline-flex; z-index: 1; }
@@ -317,6 +331,8 @@ ul.notes-list { list-style: none; margin: 0; padding: 0; }
 /* --- Quick capture -------------------------------------------------------- */
 
 .quick-capture .notes-notice { margin: 0 var(--notes-space-4) var(--notes-space-3); }
+
+.quick-capture__error { flex: 1; min-width: 0; }
 
 .quick-capture__hint {
   font-size: var(--notes-text-xs);

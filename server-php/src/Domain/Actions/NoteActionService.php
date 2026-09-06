@@ -125,8 +125,14 @@ final class NoteActionService
     }
 
     /**
-     * Open actions assigned to, or created by, the caller across every note
-     * they can see. Feeds "Suggested by Pulse" and the Reminders screen.
+     * Open actions that are the caller's to do, across every note they can see.
+     * Feeds "Suggested by Pulse" and the Reminders screen.
+     *
+     * "Theirs" means assigned to them **or unassigned** — an item nobody has
+     * picked up is everyone-on-the-note's to look at. An item assigned to
+     * someone else is deliberately excluded, including from the list of the
+     * person who created it: a personal to-do list that fills up with work you
+     * delegated stops being a to-do list.
      *
      * @return array<int, array<string, mixed>>
      */
@@ -164,7 +170,7 @@ final class NoteActionService
      */
     public function create(Identity $identity, string $noteId, array $input, string $origin = 'manual'): array
     {
-        $text = Str::limit(trim((string) ($input['text'] ?? '')), 2000);
+        $text = Str::limit(trim(self::scalar($input['text'] ?? '', 'text')), 2000);
         if ($text === '') {
             throw ApiException::validation(['text' => 'An action needs some text.']);
         }
@@ -181,7 +187,9 @@ final class NoteActionService
                 'text' => $text,
                 'priority' => self::priority($input['priority'] ?? null),
                 'due_at' => self::timestamp($input['due_at'] ?? null),
-                'assignee' => isset($input['assigned_user_id']) ? Str::limit((string) $input['assigned_user_id'], 64) : null,
+                'assignee' => isset($input['assigned_user_id'])
+                    ? Str::limit(self::scalar($input['assigned_user_id'], 'assigned_user_id'), 64)
+                    : null,
                 'origin' => in_array($origin, ['manual', 'pulse'], true) ? $origin : 'manual',
                 'actor' => $identity->userId,
             ],
@@ -205,7 +213,7 @@ final class NoteActionService
         $bindings = ['id' => $actionId];
 
         if (array_key_exists('status', $input)) {
-            $status = (string) $input['status'];
+            $status = is_scalar($input['status']) ? (string) $input['status'] : '';
             if (!in_array($status, ['open', 'done', 'cancelled'], true)) {
                 throw ApiException::validation(['status' => 'Status must be open, done or cancelled.']);
             }
@@ -218,8 +226,12 @@ final class NoteActionService
             $bindings['actor'] = $identity->userId;
         }
         if (array_key_exists('text', $input)) {
+            $text = Str::limit(trim(self::scalar($input['text'], 'text')), 2000);
+            if ($text === '') {
+                throw ApiException::validation(['text' => 'An action needs some text.']);
+            }
             $updates[] = 'text = :text';
-            $bindings['text'] = Str::limit(trim((string) $input['text']), 2000);
+            $bindings['text'] = $text;
         }
         if (array_key_exists('due_at', $input)) {
             $updates[] = 'due_at = :due_at';
@@ -233,7 +245,7 @@ final class NoteActionService
             $updates[] = 'assigned_user_id = :assignee';
             $bindings['assignee'] = $input['assigned_user_id'] === null
                 ? null
-                : Str::limit((string) $input['assigned_user_id'], 64);
+                : Str::limit(self::scalar($input['assigned_user_id'], 'assigned_user_id'), 64);
         }
 
         if ($updates === []) {
@@ -286,7 +298,7 @@ final class NoteActionService
 
     private static function priority(mixed $value): ?string
     {
-        if ($value === null || $value === '') {
+        if ($value === null || $value === '' || !is_scalar($value)) {
             return null;
         }
         $priority = strtolower((string) $value);
@@ -294,15 +306,51 @@ final class NoteActionService
         return in_array($priority, ['low', 'normal', 'high', 'urgent'], true) ? $priority : null;
     }
 
+    /**
+     * A field the client sent, as a string — or a 422.
+     *
+     * `(string) $value` on an array is a PHP warning and the literal text
+     * "Array", so `{"text": ["buy milk"]}` used to be stored as an action
+     * called *Array* and `{"assigned_user_id": [...]}` assigned one to a user
+     * of that name. A wrong type is a client bug, and the client should be told
+     * so rather than have it written down.
+     */
+    private static function scalar(mixed $value, string $field): string
+    {
+        if (!is_scalar($value)) {
+            throw ApiException::validation([$field => 'Send this as text.']);
+        }
+
+        return (string) $value;
+    }
+
     private static function timestamp(mixed $value): ?string
     {
         if ($value === null || $value === '') {
             return null;
         }
+        if (!is_scalar($value)) {
+            throw ApiException::validation(['due_at' => 'Use an ISO-8601 date and time.']);
+        }
+
         try {
-            return (new \DateTimeImmutable((string) $value))->format(\DateTimeInterface::RFC3339);
+            $moment = new \DateTimeImmutable((string) $value);
         } catch (\Throwable) {
             throw ApiException::validation(['due_at' => 'Use an ISO-8601 date and time.']);
         }
+
+        // PHP parses years PostgreSQL cannot store — `@99999999999999`,
+        // `+999999999 years`, `-4713-01-01`, and `0000-00-00` (which PHP reads
+        // as year -1). Formatting those and binding them makes the *database*
+        // reject the value, which reaches the client as a 500 carrying a
+        // fragment of the failed statement. The range check turns all of them
+        // into the 422 a bad date deserves. RFC 3339 has no year outside
+        // 0001-9999 either, so nothing legitimate is refused here.
+        $year = (int) $moment->format('Y');
+        if ($year < 1 || $year > 9999) {
+            throw ApiException::validation(['due_at' => 'That date is outside the range this can store.']);
+        }
+
+        return $moment->format(\DateTimeInterface::RFC3339);
     }
 }

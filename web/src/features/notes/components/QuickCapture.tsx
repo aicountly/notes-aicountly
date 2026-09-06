@@ -7,19 +7,30 @@
  * wait for the network — {@link useCreateNote} writes the note with a
  * client-generated id and the editor opens on it, online or not.
  *
- * Shortcuts for capabilities this deployment does not have are absent, not
- * greyed out: a scan button that answers 503 is worse than no scan button.
+ * Two rules about the shortcuts, both of them about honesty:
+ *
+ *   - Shortcuts for capabilities this deployment does not have are absent, not
+ *     greyed out: a scan button that answers 503 is worse than no scan button.
+ *   - A shortcut does what its label says. "Record a voice note" opens the
+ *     recorder and "Scan a document" opens the scanner; neither drops the user
+ *     into an empty text note and hopes they work out the rest.
+ *
+ * Files are stored *before* the note is opened. Navigating first would unmount
+ * this component, and with it the only place a failed upload could be reported.
  */
 
 import { useEffect, useId, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-import { Button, LiveStatus } from '../../../shared/ui/primitives'
+import { Button, Dialog, LiveStatus } from '../../../shared/ui/primitives'
 import { Icon } from '../../../shared/ui/Icon'
 import type { IconName } from '../../../shared/ui/Icon'
-import { ApiError, api } from '../../../shared/api/client'
+import { ApiError } from '../../../shared/api/client'
 import { useAppConfig, useFeature } from '../../../app/AppConfigProvider'
+import { uploadFile } from '../../attachments/hooks/useAttachments'
+import { DocumentScanner } from '../../capture/components/DocumentScanner'
+import { VoiceRecorder, isVoiceRecordingSupported } from '../../capture/components/VoiceRecorder'
 import { useCreateNote } from '../hooks/useNotes'
 import type { CreateNoteInput } from '../hooks/useNotes'
 import type { NoteDocument, NoteType } from '../../../shared/api/types'
@@ -69,13 +80,12 @@ interface Shortcut {
   label: string
   icon: IconName
   available: boolean
-  noteType: NoteType
-  /** Kinds whose body is a checklist rather than prose. */
-  checklist?: boolean
+  run: () => void
 }
 
 function describeError(error: unknown): string {
   if (error instanceof ApiError) return error.message
+  if (error instanceof Error && error.message !== '') return error.message
   return 'That did not save. Please try again.'
 }
 
@@ -100,12 +110,14 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
   // shortcut entirely.
   const canTranscribe = useFeature('transcription')
   const canScan = useFeature('ocr')
-  const canDraw = useFeature('canvas')
 
   const [expanded, setExpanded] = useState(false)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [error, setError] = useState<string | null>(null)
+  /** A note that was created before its files failed to store. */
+  const [strandedNoteId, setStrandedNoteId] = useState<string | null>(null)
+  const [capture, setCapture] = useState<'voice' | 'scan' | null>(null)
   const [status, setStatus] = useState('')
 
   const titleId = useId()
@@ -113,69 +125,140 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
   const localRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const field = inputRef ?? localRef
-
-  const shortcuts: Shortcut[] = [
-    { key: 'checklist', label: 'New checklist', icon: 'checklist', available: true, noteType: 'checklist', checklist: true },
-    { key: 'voice', label: 'New voice note', icon: 'mic', available: canTranscribe, noteType: 'voice' },
-    { key: 'scan', label: 'Scan a document', icon: 'scan', available: canScan, noteType: 'scan' },
-    { key: 'drawing', label: 'New drawing', icon: 'draw', available: canDraw, noteType: 'drawing' },
-  ]
+  /** The note this attempt already created, so a retry does not make a second. */
+  const pendingNoteId = useRef<string | null>(null)
 
   // The body grows with what is typed rather than scrolling inside four rows.
   useEffect(() => {
     const element = field.current
-    if (!element || !expanded) return
+    if (!element) return
+
+    if (!expanded) {
+      // Collapsing has to hand the inline height back, or the one-line
+      // composer stays as tall as the draft that was just closed.
+      element.style.height = ''
+      return
+    }
+
     element.style.height = 'auto'
     element.style.height = `${element.scrollHeight}px`
   }, [body, expanded, field])
 
   const hasContent = title.trim() !== '' || body.trim() !== ''
 
+  const clearDraft = () => {
+    setTitle('')
+    setBody('')
+    setExpanded(false)
+    setError(null)
+    setStrandedNoteId(null)
+    pendingNoteId.current = null
+  }
+
   const collapse = () => {
     setExpanded(false)
     setError(null)
   }
 
-  const open = async (input: CreateNoteInput, announcement: string) => {
+  /**
+   * Editing after a half-finished save abandons the note that save produced.
+   *
+   * It still holds what had been typed at the time, so it is not lost — but
+   * the next save has to be a new note rather than an old one missing the
+   * words that were added since.
+   */
+  const onDraftEdited = () => {
+    if (pendingNoteId.current === null) return
+    pendingNoteId.current = null
+    setStrandedNoteId(null)
     setError(null)
-    try {
-      const note = await create.mutateAsync({ ...input, notebook_id: notebookId })
-      setStatus(announcement)
-      setTitle('')
-      setBody('')
-      setExpanded(false)
-      navigate(`/notes/${note.id}`)
-      return note
-    } catch (reason) {
-      setError(describeError(reason))
-      return null
-    }
+  }
+
+  const draft = (noteType: NoteType, asChecklist = false): CreateNoteInput => ({
+    title: title.trim() === '' ? null : title.trim(),
+    document: asChecklist ? checklistFromText(body) : documentFromText(body),
+    note_type: noteType,
+    notebook_id: notebookId,
+    source: 'quick-capture',
+  })
+
+  /**
+   * Create the note, store whatever came with it, then open it.
+   *
+   * Rejects rather than swallowing: the recorder and the scanner both keep what
+   * they captured when this fails, and show the reason themselves.
+   */
+  const saveNote = async (input: CreateNoteInput, files: File[], announcement: string) => {
+    const noteId = pendingNoteId.current ?? (await create.mutateAsync(input)).id
+    pendingNoteId.current = noteId
+
+    for (const file of files) await uploadFile(noteId, file)
+
+    setStatus(announcement)
+    setCapture(null)
+    clearDraft()
+    navigate(`/notes/${noteId}`)
+  }
+
+  /** The composer's own failures, which have nowhere else to appear. */
+  const report = (reason: unknown) => {
+    const created = pendingNoteId.current
+    setStrandedNoteId(created)
+    setError(
+      created === null
+        ? describeError(reason)
+        : `The note was created but the file did not attach. ${describeError(reason)}`,
+    )
   }
 
   const save = () => {
     if (!hasContent || create.isPending) return
-    void open(
-      {
-        title: title.trim() === '' ? null : title.trim(),
-        document: documentFromText(body),
-        note_type: 'document',
-        source: 'quick-capture',
-      },
-      'Note saved',
-    )
+    setError(null)
+    void saveNote(draft('document'), [], 'Note saved').catch(report)
   }
 
-  const startTyped = (shortcut: Shortcut) => {
-    void open(
-      {
-        title: title.trim() === '' ? null : title.trim(),
-        document: shortcut.checklist ? checklistFromText(body) : documentFromText(body),
-        note_type: shortcut.noteType,
-        source: 'quick-capture',
-      },
-      `${shortcut.label} created`,
-    )
+  const closeCapture = () => {
+    setCapture(null)
+    // Whatever an abandoned capture created keeps the text that was typed into
+    // it; the next capture starts a note of its own.
+    pendingNoteId.current = null
+    setStrandedNoteId(null)
   }
+
+  const shortcuts: Shortcut[] = [
+    {
+      key: 'checklist',
+      label: 'New checklist',
+      icon: 'checklist',
+      available: true,
+      run: () => {
+        setError(null)
+        void saveNote(draft('checklist', true), [], 'Checklist created').catch(report)
+      },
+    },
+    {
+      key: 'voice',
+      label: 'Record a voice note',
+      icon: 'mic',
+      // Both have to be true: a deployment that transcribes, and a browser that
+      // can record at all. Either missing and there is no button to press.
+      available: canTranscribe && isVoiceRecordingSupported(),
+      run: () => {
+        setError(null)
+        setCapture('voice')
+      },
+    },
+    {
+      key: 'scan',
+      label: 'Scan a document',
+      icon: 'scan',
+      available: canScan,
+      run: () => {
+        setError(null)
+        setCapture('scan')
+      },
+    },
+  ]
 
   const onPickImage = async (file: File | undefined) => {
     if (!file) return
@@ -183,29 +266,15 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
     const limit = config.limits.max_attachment_bytes
     if (file.size > limit) {
       setError(`That image is larger than the ${formatBytes(limit)} this deployment accepts.`)
+      setStrandedNoteId(null)
       return
     }
 
-    const note = await open(
-      {
-        title: title.trim() === '' ? null : title.trim(),
-        document: documentFromText(body),
-        note_type: 'document',
-        source: 'quick-capture',
-      },
-      'Note created',
-    )
-    if (!note) return
-
-    // The note is already open by now; a failed upload must still be reported,
-    // so it is announced rather than swallowed.
-    const form = new FormData()
-    form.append('file', file)
+    setError(null)
     try {
-      await api.upload(`/notes/${note.id}/attachments`, form)
-      setStatus('Image attached')
+      await saveNote(draft('document'), [file], 'Note saved with the image attached')
     } catch (reason) {
-      setStatus(`The note was created but the image did not attach. ${describeError(reason)}`)
+      report(reason)
     }
   }
 
@@ -236,7 +305,10 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
             className="quick-capture__title"
             placeholder="Title"
             value={title}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => {
+              setTitle(event.target.value)
+              onDraftEdited()
+            }}
             onKeyDown={onFieldKeyDown}
           />
         </>
@@ -253,15 +325,26 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
         placeholder="Take a note…"
         value={body}
         onFocus={() => setExpanded(true)}
-        onChange={(event) => setBody(event.target.value)}
+        onChange={(event) => {
+          setBody(event.target.value)
+          // Escape collapses without moving focus, so typing has to bring the
+          // controls back — otherwise Save is unreachable from the keyboard.
+          setExpanded(true)
+          onDraftEdited()
+        }}
         onKeyDown={onFieldKeyDown}
       />
 
       {error ? (
-        <p className="notes-notice notes-notice--danger" role="alert">
+        <div className="notes-notice notes-notice--danger" role="alert">
           <Icon name="alert" size={14} />
-          {error}
-        </p>
+          <span className="quick-capture__error">{error}</span>
+          {strandedNoteId ? (
+            <Button size="sm" variant="ghost" onClick={() => navigate(`/notes/${strandedNoteId}`)}>
+              Open the note
+            </Button>
+          ) : null}
+        </div>
       ) : null}
 
       {expanded ? (
@@ -278,7 +361,7 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
                 aria-label={shortcut.label}
                 title={shortcut.label}
                 disabled={create.isPending}
-                onClick={() => startTyped(shortcut)}
+                onClick={shortcut.run}
               />
             ))}
 
@@ -326,6 +409,34 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
           </Button>
         </div>
       ) : null}
+
+      {/* Mounted only while open, so the microphone and the camera are released
+          the moment the dialog closes rather than when this panel unmounts. */}
+      <Dialog
+        open={capture === 'voice'}
+        onClose={closeCapture}
+        title="Record a voice note"
+        description="The recording is saved as a new note when you finish."
+        width={560}
+      >
+        <VoiceRecorder
+          onCancel={closeCapture}
+          onSave={(file) => saveNote(draft('voice'), [file], 'Voice note saved')}
+        />
+      </Dialog>
+
+      <Dialog
+        open={capture === 'scan'}
+        onClose={closeCapture}
+        title="Scan a document"
+        description="Capture each page, straighten it, then save them all as one note."
+        width={720}
+      >
+        <DocumentScanner
+          onCancel={closeCapture}
+          onSave={(files) => saveNote(draft('scan'), files, 'Scan saved')}
+        />
+      </Dialog>
 
       <LiveStatus>{status}</LiveStatus>
     </section>

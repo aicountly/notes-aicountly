@@ -28,6 +28,7 @@ Env::load(__DIR__ . '/.env');
 
 use Aicountly\Api\Auth\SessionGuard;
 use Aicountly\Api\Http\ApiException;
+use Aicountly\Api\Http\CompanyContext;
 use Aicountly\Api\Http\Request;
 use Aicountly\Api\Http\Response;
 use Aicountly\Api\Http\Router;
@@ -309,6 +310,12 @@ try {
 
     $request = Request::fromGlobals($path, $method, bearer_token());
     $request->routeParams = $matched['params'];
+
+    // cmp_id / fy_id / bo_id, if the caller sent them. Notes scopes its own
+    // data by the portal's tenant_id and never by these; they exist so that a
+    // call onward to a sibling product says which company it is about. See
+    // Http\CompanyContext.
+    CompanyContext::capture($request->query);
 
     $identity = $matched['auth']
         ? SessionGuard::authenticate($request->bearerToken)

@@ -94,6 +94,34 @@ final class ActivityTest extends TestCase
         $this->assertSame('note.created', $second['body']['data'][0]['action'], 'the oldest entry is last');
     }
 
+    /**
+     * A page past the end still knows how long the trail is.
+     *
+     * `total` came from a window function on the returned rows, so an offset
+     * beyond the last entry — a client scrolled deep, or one re-reading a
+     * position after entries were collapsed — reported a trail of zero on a
+     * note with a full history, and "no activity yet" is what the panel would
+     * then say.
+     */
+    public function testAPagePastTheEndStillReportsTheTotal(): void
+    {
+        $note = $this->noteWithHistory();
+
+        $beyond = $this->alice->get('/notes/' . $note['id'] . '/activity', ['limit' => 10, 'offset' => 50]);
+
+        $this->assertSame(200, $beyond['status']);
+        $this->assertCount(0, $beyond['body']['data']);
+        $this->assertSame(3, $beyond['body']['meta']['total'], 'the trail is still three entries long');
+        $this->assertFalse($beyond['body']['meta']['has_more']);
+
+        // And the count behind it is a read like any other: it is gated by the
+        // same access CTE, not by the caller having asked nicely.
+        $this->assertSame(404, $this->bob->get(
+            '/notes/' . $note['id'] . '/activity',
+            ['offset' => 50],
+        )['status']);
+    }
+
     public function testOnlySomeoneWhoCanOpenTheNoteCanReadItsTrail(): void
     {
         $note = $this->noteWithHistory();

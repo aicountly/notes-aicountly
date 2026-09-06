@@ -6,6 +6,7 @@ namespace Aicountly\Api\Tests;
 
 use Aicountly\Api\Auth\Identity;
 use Aicountly\Api\Http\ApiException;
+use Aicountly\Api\Http\CompanyContext;
 use Aicountly\Api\Http\Request;
 use Aicountly\Api\Http\Response;
 use Aicountly\Api\Http\Router;
@@ -75,6 +76,10 @@ final class ApiClient
             $request = Request::forTesting($method, $normalised, array_map('strval', $query), $body);
             $request->routeParams = $matched['params'];
 
+            // The front controller does this too; without it a test could not
+            // observe company context reaching a sibling call.
+            CompanyContext::capture($request->query);
+
             /** @var Response $response */
             $response = ($matched['handler'])($request, $this->identity);
 
@@ -83,6 +88,7 @@ final class ApiClient
             return self::capture(Response::error($e));
         } finally {
             $_GET = $previousGet;
+            CompanyContext::clear();
         }
     }
 

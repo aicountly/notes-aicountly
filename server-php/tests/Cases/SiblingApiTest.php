@@ -25,7 +25,11 @@ final class SiblingApiTest extends TestCase
 
     public function setUp(): void
     {
-        foreach (['DRIVE_API_URL', 'CALENDAR_API_URL', 'CONTACTS_API_URL', 'CONNECT_API_URL', 'PULSE_API_URL'] as $key) {
+        foreach ([
+            'DRIVE_API_URL', 'CALENDAR_API_URL', 'CONTACTS_API_URL', 'CONNECT_API_URL', 'PULSE_API_URL',
+            'DRIVE_API_ORIGIN', 'DOCS_API_ORIGIN', 'CALENDAR_API_ORIGIN', 'CONTACTS_API_ORIGIN',
+            'CONNECT_API_ORIGIN', 'PULSE_API_ORIGIN',
+        ] as $key) {
             putenv($key);
         }
     }
@@ -73,14 +77,46 @@ final class SiblingApiTest extends TestCase
         $this->assertSame('https://buddy.gh.aicountly.com', SiblingApi::origin('pulse', 'notes.gh.aicountly.com'));
     }
 
-    public function testAnExplicitOverrideWins(): void
+    public function testAnExplicitOriginOverrideWins(): void
     {
-        putenv('DRIVE_API_URL=https://drive.internal.test/api/');
+        putenv('DRIVE_API_ORIGIN=https://drive.internal.test/');
 
         // Trailing slash stripped, so callers can concatenate a path safely.
-        $this->assertSame('https://drive.internal.test/api', SiblingApi::origin('drive', 'notes.aicountly.com'));
+        $this->assertSame('https://drive.internal.test', SiblingApi::origin('drive', 'notes.aicountly.com'));
+
+        putenv('DRIVE_API_ORIGIN');
+    }
+
+    public function testTheOverrideIsAcceptedUnderEitherSpelling(): void
+    {
+        // Drive's product_code is `docs`; its host is drive.aicountly.com.
+        // Someone editing a .env is looking at the hostname, so both names work.
+        putenv('DOCS_API_ORIGIN=https://drive.internal.test');
+        $this->assertSame('https://drive.internal.test', SiblingApi::origin('drive', 'notes.aicountly.com'));
+        putenv('DOCS_API_ORIGIN');
+
+        putenv('DRIVE_API_ORIGIN=https://drive.other.test');
+        $this->assertSame('https://drive.other.test', SiblingApi::origin('drive', 'notes.aicountly.com'));
+        putenv('DRIVE_API_ORIGIN');
+    }
+
+    public function testTheLegacyUrlVariableIsReadVerbatim(): void
+    {
+        // `_API_URL` always named a full API base including /api, so apiBase()
+        // must return it untouched — appending the prefix would give /api/api.
+        putenv('DRIVE_API_URL=https://drive.legacy.test/api');
+
+        $this->assertSame('https://drive.legacy.test/api', SiblingApi::apiBase('drive', 'notes.aicountly.com'));
+        // It is a *base*, not an origin, so it does not answer origin().
+        $this->assertSame('https://drive.aicountly.com', SiblingApi::origin('drive', 'notes.aicountly.com'));
 
         putenv('DRIVE_API_URL');
+    }
+
+    public function testApiBaseAppendsThePrefixEveryProductMountsAt(): void
+    {
+        $this->assertSame('https://drive.aicountly.com/api', SiblingApi::apiBase('drive', 'notes.aicountly.com'));
+        $this->assertSame('https://contacts.gh.aicountly.com/api', SiblingApi::apiBase('contacts', 'notes.gh.aicountly.com'));
     }
 
     public function testAnUnknownProductIsAProgrammingError(): void
