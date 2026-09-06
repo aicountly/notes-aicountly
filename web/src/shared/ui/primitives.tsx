@@ -146,14 +146,45 @@ export function Dialog({ open, onClose, title, description, children, footer, wi
 
     previouslyFocused.current = document.activeElement as HTMLElement | null
 
+    // `offsetParent` is the tempting visibility test and the wrong one: it is
+    // null for any position:fixed element, and null everywhere in an engine
+    // without layout. Either way the trap would quietly include nothing and
+    // stop trapping. `checkVisibility` answers the actual question where it
+    // exists; otherwise an element is assumed focusable unless it says
+    // otherwise, which fails open rather than silently disabling the trap.
+    const isFocusable = (element: HTMLElement): boolean => {
+      if (element.hasAttribute('hidden') || element.getAttribute('aria-hidden') === 'true') return false
+      if (typeof element.checkVisibility === 'function') return element.checkVisibility()
+      return true
+    }
+
     const focusables = () =>
       Array.from(
         panelRef.current?.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+          'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]),' +
+            ' select:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ) ?? [],
-      ).filter((element) => element.offsetParent !== null)
+      ).filter(isFocusable)
 
-    const timer = window.setTimeout(() => (focusables()[0] ?? panelRef.current)?.focus(), 0)
+    /**
+     * Where focus lands on open.
+     *
+     * Not simply the first focusable: that is the Close button in the header,
+     * so the dialog opens with Enter wired to dismissing it. Focus goes to the
+     * first control in the body — the field the user came here to fill in —
+     * and only falls back to the panel when the body has none.
+     */
+    const initialFocus = (): HTMLElement | null => {
+      const explicit = panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')
+      if (explicit && isFocusable(explicit)) return explicit
+
+      const body = panelRef.current?.querySelector<HTMLElement>('.dialog__body')
+      const inBody = focusables().find((element) => body?.contains(element))
+
+      return inBody ?? panelRef.current
+    }
+
+    const timer = window.setTimeout(() => initialFocus()?.focus(), 0)
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
