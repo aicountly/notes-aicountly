@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { QueryClient, UseQueryResult } from '@tanstack/react-query'
 
 import { ApiError, api } from '../../../shared/api/client'
+import { useAuth } from '../../../auth/AuthProvider'
 import { queryKeys } from '../../../shared/query/queryClient'
 import type { NoteCapabilities, NoteMember, NoteRole } from '../../../shared/api/types'
 
@@ -132,4 +133,27 @@ export function useRemoveNoteMember() {
       api.delete(`/notes/${noteId}/members/${encodeURIComponent(userId)}`),
     onSuccess: (_result, { noteId }) => invalidateSharing(client, noteId),
   })
+}
+
+/**
+ * A way to put a name to a user id.
+ *
+ * Activity rows and comments carry ids and nothing else — deliberately, since
+ * a name copied into a row is stale the moment somebody is renamed. The member
+ * list is the only place a note holds identities, so it is what everything
+ * else resolves against; an id belonging to nobody on the list (somebody whose
+ * access was revoked after they wrote a comment) becomes "Someone" rather than
+ * a raw id in the middle of a sentence.
+ */
+export function useMemberNames(noteId: string | null): (userId: string) => string {
+  const { profile } = useAuth()
+  const members = useNoteMembers(noteId)
+
+  return (userId: string): string => {
+    if (profile !== null && profile.user_id === userId) return 'You'
+
+    const member = members.data?.find((candidate) => candidate.user_id === userId)
+
+    return member ? memberLabel(member) : 'Someone'
+  }
 }

@@ -30,6 +30,9 @@ use Aicountly\Api\Support\Str;
  *   - `grounding` — `question` for anything answered *from* the user's notes,
  *     which must carry citations; `transform` for work done *on* text the
  *     caller already has in front of them.
+ *   - `reads` — `corpus` when the action retrieves across notes rather than
+ *     reading only what the caller handed over. That is the expensive kind, so
+ *     it decides the rate-limit bucket; absent means the cheap kind.
  *   - `instruction` — the system text for this action. Ours, always; note text
  *     never joins it. See {@see PromptBundle}.
  */
@@ -44,6 +47,9 @@ final class AiActionRegistry
     public const QUESTION = 'question';
     /** Work done on text the caller supplied or is already looking at. */
     public const TRANSFORM = 'transform';
+
+    /** Retrieves across the user's notes, so it is charged to the heavy bucket. */
+    public const CORPUS = 'corpus';
 
     /** @var array<string, array<string, string>> */
     private const ACTIONS = [
@@ -205,6 +211,7 @@ final class AiActionRegistry
             'scope' => self::NOTE,
             'output' => 'structured',
             'grounding' => self::QUESTION,
+            'reads' => self::CORPUS,
             'instruction' => 'The first block is the note the user is reading; the rest are other notes of '
                 . 'theirs. Say which of the others genuinely relate to it and why, as '
                 . '{"related": [{"block": 1, "why": "…"}]}, citing each block number. Leave the list empty '
@@ -227,6 +234,7 @@ final class AiActionRegistry
             'scope' => self::NOTEBOOK,
             'output' => 'text',
             'grounding' => self::QUESTION,
+            'reads' => self::CORPUS,
             'instruction' => 'Answer the user\'s question using only the blocks in the context, which come '
                 . 'from notes in one notebook of theirs.',
         ],
@@ -236,6 +244,7 @@ final class AiActionRegistry
             'scope' => self::NOTES,
             'output' => 'text',
             'grounding' => self::QUESTION,
+            'reads' => self::CORPUS,
             'instruction' => 'Answer the user\'s question using only the blocks in the context, which were '
                 . 'retrieved from the notes this user is allowed to read.',
         ],

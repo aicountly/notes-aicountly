@@ -485,6 +485,37 @@ final class PulseTest extends TestCase
         });
     }
 
+    /**
+     * "What else have I written about this?"
+     *
+     * The note being read is block 1 and its candidates follow, so the note
+     * cannot come back as related to itself, and every suggestion is one the
+     * caller could have opened anyway.
+     */
+    public function testFindRelatedOffersOtherNotesButNotTheOneBeingRead(): void
+    {
+        if (!$this->retrievalReady()) {
+            return;
+        }
+
+        $this->withPulse(function (): void {
+            $current = $this->note($this->alice, 'Harbour survey', 'The harbour survey needs a diver in June.');
+            $other = $this->note($this->alice, 'Diver quotes', 'Two divers quoted for the harbour work.');
+            $this->note($this->bob, 'Bob harbour', 'Bob also works on the harbour survey.');
+
+            $provider = new RecordingPulseProvider('{"related":[{"block":2,"why":"the same harbour job"}]} [2]');
+            $answer = $this->pulse($provider)->onNote($this->aliceIdentity, $current['id'], 'find_related');
+
+            $blocks = $provider->bundle->contextItems();
+            $this->assertSame($current['id'], $blocks[0]['note_id'] ?? null, 'the note being read is block 1');
+            $this->assertSame($other['id'], $blocks[1]['note_id'] ?? null, 'a candidate follows it');
+            $this->assertCount(2, $blocks, 'its own duplicate is dropped and a stranger\'s note never arrives');
+
+            $this->assertTrue($answer['grounded']);
+            $this->assertSame($other['id'], $answer['citations'][0]['note_id'] ?? null, 'the cited block is the other note');
+        });
+    }
+
     // -- Citations ----------------------------------------------------------
 
     public function testAnAnswerFromTheUsersNotesCitesThem(): void

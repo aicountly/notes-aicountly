@@ -109,9 +109,9 @@ final class NotesAIService
      */
     public function selection(Identity $identity, array $input): array
     {
-        $this->begin('ai', $identity);
-
+        Features::require(Features::AI);
         $action = AiActionRegistry::requireAction($input['action'] ?? null, [AiActionRegistry::SELECTION]);
+        $this->meter($action, $identity);
 
         $text = trim((string) (is_scalar($input['text'] ?? null) ? $input['text'] : ''));
         if ($text === '') {
@@ -165,9 +165,10 @@ final class NotesAIService
      */
     public function onNote(Identity $identity, string $noteId, string $actionId, array $input = []): array
     {
-        $this->begin('ai', $identity);
-
+        Features::require(Features::AI);
         $action = AiActionRegistry::requireAction($actionId, [AiActionRegistry::SELECTION, AiActionRegistry::NOTE]);
+        $this->meter($action, $identity);
+
         $note = $this->noteForAi($identity, $noteId);
 
         if ($action['id'] === 'find_related') {
@@ -227,11 +228,10 @@ final class NotesAIService
      */
     public function askNotebook(Identity $identity, string $notebookId, array $input): array
     {
-        // Retrieval reads across many notes and cannot be answered from an
-        // index, so it sits in its own, much smaller bucket.
-        $this->begin('ai_heavy', $identity);
-
+        Features::require(Features::AI);
         $action = AiActionRegistry::requireAction('ask_notebook', [AiActionRegistry::NOTEBOOK]);
+        $this->meter($action, $identity);
+
         $question = self::question($input);
 
         $this->permissions->requireNotebook($identity, $notebookId, NotePermissionService::VIEW);
@@ -255,9 +255,10 @@ final class NotesAIService
      */
     public function askNotes(Identity $identity, array $input): array
     {
-        $this->begin('ai_heavy', $identity);
-
+        Features::require(Features::AI);
         $action = AiActionRegistry::requireAction('ask_notes', [AiActionRegistry::NOTES]);
+        $this->meter($action, $identity);
+
         $question = self::question($input);
 
         $scope = [];
@@ -408,8 +409,8 @@ final class NotesAIService
     private function findRelated(Identity $identity, array $note, array $action): array
     {
         $body = self::noteText($note);
-        $query = trim(((string) ($note['title'] ?? '')) . ' ' . Str::limit($body, 400));
-        if (trim($query) === '') {
+        $query = self::relatedQuery($note['title'] === null ? '' : (string) $note['title'], $body);
+        if ($query === '') {
             throw ApiException::validation(['note_id' => 'There is nothing in this note to match against.']);
         }
 
@@ -443,6 +444,40 @@ final class NotesAIService
             $items,
             $citations,
         );
+    }
+
+    /**
+     * A note, as a query for finding its neighbours.
+     *
+     * Handing the whole note to search would find nothing: retrieval runs
+     * `websearch_to_tsquery`, which **ands** its terms, and no second note
+     * contains every word of the first. So the note is reduced to the handful
+     * of words it uses most — its subject, in practice — joined with `or`,
+     * which is the operator that syntax spells as a word.
+     *
+     * Words of three characters or fewer are dropped: they are almost entirely
+     * stop words, and a query of "the or and or for" would rank every note the
+     * user owns as equally related.
+     */
+    private static function relatedQuery(string $title, string $body): string
+    {
+        $tokens = preg_split(
+            '/[^\p{L}\p{N}]+/u',
+            mb_strtolower($title . ' ' . Str::limit($body, 4000), 'UTF-8'),
+            -1,
+            PREG_SPLIT_NO_EMPTY,
+        ) ?: [];
+
+        $counts = [];
+        foreach ($tokens as $token) {
+            if (mb_strlen($token, 'UTF-8') > 3) {
+                $counts[$token] = ($counts[$token] ?? 0) + 1;
+            }
+        }
+
+        arsort($counts);
+
+        return implode(' or ', array_slice(array_keys($counts), 0, 8));
     }
 
     // -----------------------------------------------------------------------
@@ -520,17 +555,24 @@ final class NotesAIService
     // -----------------------------------------------------------------------
 
     /**
-     * The two gates every Pulse request passes, in this order.
+     * Charge the request to the bucket its work belongs to.
      *
-     * The feature check comes first so a deployment that never offered Pulse
-     * cannot have a user's rate-limit budget spent on the 503 it was always
-     * going to answer. They live here rather than in the controller because
-     * "which bucket" is a property of the work, not of the route.
+     * Always after {@see Features::require()}, so a deployment that never
+     * offered Pulse cannot spend a user's budget on the 503 it was always
+     * going to answer. And keyed on the action rather than the route, because
+     * the cost is in the work: `find_related` arrives through a note endpoint
+     * but retrieves across the whole corpus, so it is charged like the other
+     * corpus reads rather than like a toolbar click. Typing must never be what
+     * exhausts a limit, so selection actions sit in the generous bucket.
+     *
+     * @param array<string, string> $action
      */
-    private function begin(string $bucket, Identity $identity): void
+    private function meter(array $action, Identity $identity): void
     {
-        Features::require(Features::AI);
-        RateLimiter::hit($bucket, $identity->userId);
+        RateLimiter::hit(
+            ($action['reads'] ?? '') === AiActionRegistry::CORPUS ? 'ai_heavy' : 'ai',
+            $identity->userId,
+        );
     }
 
     /**
