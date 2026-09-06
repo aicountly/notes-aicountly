@@ -355,26 +355,27 @@ final class SmartFolderService
     /**
      * Which slice of the library the rules are asked about.
      *
-     * An explicit `?scope=` wins. Otherwise a folder whose rules talk about
-     * `is_archived` gets the whole library, because the default view hides
-     * archived notes and an "Archived invoices" folder that always came back
-     * empty would read as a bug in the folder rather than in the default.
+     * A rule about `is_archived` is the folder's own answer to the question
+     * `scope` asks, so it wins outright: the query is widened to the whole
+     * library and the rule does the filtering. Without that, an "Archived
+     * invoices" folder is permanently empty — the default list hides archived
+     * notes, and a client browsing a folder has no reason to ask for them.
+     *
+     * Otherwise `?scope=` narrows as it does on `GET /notes`. Trash is not on
+     * the list: a folder is a view over the library, and Trash is where things
+     * go to stop being in it.
      *
      * @param array{match: string, conditions: array<int, array<string, mixed>>} $rules
      */
     private function scope(array $rules, string $requested): string
     {
-        if (in_array($requested, self::SCOPES, true)) {
-            return $requested;
-        }
-
         foreach ($rules['conditions'] as $condition) {
-            if (($condition['field'] ?? '') === 'is_archived') {
+            if (is_array($condition) && ($condition['field'] ?? '') === 'is_archived') {
                 return 'all';
             }
         }
 
-        return 'active';
+        return in_array($requested, self::SCOPES, true) ? $requested : 'active';
     }
 
     // -----------------------------------------------------------------------
@@ -488,10 +489,14 @@ final class SmartFolderService
             return self::EMPTY_RULES;
         }
 
+        // Written by this service, so it is well formed — but it is still a
+        // jsonb column someone can edit by hand, and a read path is the wrong
+        // place to discover that. Anything unexpected reads as "no rules".
         $conditions = $rules['conditions'] ?? [];
+        $match = $rules['match'] ?? 'all';
 
         return [
-            'match' => strtolower((string) ($rules['match'] ?? 'all')),
+            'match' => strtolower(is_scalar($match) ? (string) $match : 'all'),
             'conditions' => is_array($conditions) ? array_values($conditions) : [],
         ];
     }
@@ -505,21 +510,28 @@ final class SmartFolderService
         $rules = $this->rulesOf($row);
         $count = $this->countFor($identity, $rules);
 
-        return [
+        $folder = [
             'id' => (string) $row['id'],
             'name' => (string) $row['name'],
             'icon' => $row['icon'] === null ? null : (string) $row['icon'],
             'color' => $row['color'] === null ? null : (string) $row['color'],
             'position' => (int) $row['position'],
             'rules' => $rules,
-            // Null when the stored rules no longer compile; `rules_valid` is
-            // what lets the UI say so instead of rendering a blank badge.
-            'note_count' => $count['count'],
-            'note_count_is_capped' => $count['capped'],
             'rules_valid' => $count['valid'],
             'created_at' => self::timestamp($row['created_at'] ?? null),
             'updated_at' => self::timestamp($row['updated_at'] ?? null),
         ];
+
+        // When the rules no longer compile the badge is *absent*, not zero: a
+        // zero would be a claim about the library, and what is actually known
+        // is only that the folder cannot be run. `rules_valid` is what the UI
+        // branches on to say so.
+        if ($count['valid']) {
+            $folder['note_count'] = $count['count'];
+            $folder['note_count_is_capped'] = $count['capped'];
+        }
+
+        return $folder;
     }
 
     // -----------------------------------------------------------------------

@@ -20,10 +20,25 @@ export interface ShortcutHandlers {
   onOpenSearch: () => void
 }
 
+/**
+ * Is the user typing into something?
+ *
+ * `isContentEditable` alone is not enough. It is the obvious check and it is
+ * the one that quietly does nothing where an engine does not reflect the
+ * property — and the cost of it failing is that pressing "/" mid-sentence in
+ * the note body opens a search dialog. So the DOM is asked directly as well,
+ * via the nearest `[contenteditable]` ancestor, which covers the editor's own
+ * root and everything ProseMirror renders inside it.
+ */
 function isTypingContext(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
+
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return true
   if (target.isContentEditable) return true
-  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+
+  const editable = target.closest('[contenteditable]')
+
+  return editable !== null && editable.getAttribute('contenteditable') !== 'false'
 }
 
 export function useKeyboardShortcuts({ onOpenPalette, onOpenSearch }: ShortcutHandlers): void {

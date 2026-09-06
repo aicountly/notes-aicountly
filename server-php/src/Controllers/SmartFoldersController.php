@@ -60,9 +60,9 @@ final class SmartFoldersController
             'limit' => $request->queryInt('limit', 30, 1, 100),
             'cursor' => $request->queryString('cursor'),
             'sort' => $request->queryString('sort', 'updated_desc'),
-            // Empty rather than 'active': an absent scope lets the folder's own
-            // rules choose, so a folder built around archived notes is not
-            // permanently empty because the default view hides them.
+            // Passed through rather than defaulted here: a folder whose rules
+            // talk about archived notes answers this question itself, and only
+            // the service knows that. See SmartFolderService::scope().
             'scope' => $request->queryString('scope'),
         ]);
 

@@ -191,6 +191,11 @@ final class SmartFoldersTest extends TestCase
         // has to widen the scope itself or it is permanently empty.
         $this->assertSame(['last year'], $this->titles($this->alice, $folder['id']));
         $this->assertSame(1, $this->alice->get('/smart-folders')['body']['data'][0]['note_count']);
+
+        // And the rule outranks the scope the client happens to send: the notes
+        // list is browsed with `scope=active` everywhere, which would otherwise
+        // make this folder look empty in exactly the app that ships it.
+        $this->assertSame(['last year'], $this->titles($this->alice, $folder['id'], ['scope' => 'active']));
     }
 
     public function testATrashedNoteLeavesEveryFolder(): void
