@@ -255,6 +255,28 @@ export function subtreeHeight(node: NotebookNode): number {
   return 1 + Math.max(...children.map(subtreeHeight))
 }
 
+/**
+ * The ids of everything above a notebook, outermost first.
+ *
+ * What lets the tree open itself onto the notebook the user is looking at:
+ * a row three levels down is not "collapsed", it is missing.
+ */
+export function notebookAncestors(nodes: NotebookNode[], id: string): string[] {
+  // `null` rather than an empty array for "not here": a root notebook has no
+  // ancestors, and the two answers must not look the same to the caller.
+  const walk = (list: NotebookNode[], trail: string[]): string[] | null => {
+    for (const node of list) {
+      if (node.id === id) return trail
+      const found = walk(node.children ?? [], [...trail, node.id])
+      if (found !== null) return found
+    }
+
+    return null
+  }
+
+  return walk(nodes, []) ?? []
+}
+
 /** Every id in this node's subtree, including its own. */
 export function subtreeIds(node: NotebookNode): Set<string> {
   const ids = new Set<string>([node.id])
