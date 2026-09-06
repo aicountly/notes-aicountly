@@ -46,15 +46,20 @@ final class Request
         return new self($method, $path, $query, (string) file_get_contents('php://input'), $bearerToken);
     }
 
-    /** @param array<string, string> $query */
+    /**
+     * @param array<string, string> $query
+     * @param string|null $rawBody Bypasses JSON encoding, so a test can send a
+     *        malformed body — the one case `$body` cannot express.
+     */
     public static function forTesting(
         string $method,
         string $path,
         array $query = [],
         mixed $body = null,
         string $bearerToken = '',
+        ?string $rawBody = null,
     ): self {
-        $raw = $body === null ? '' : (string) json_encode($body);
+        $raw = $rawBody ?? ($body === null ? '' : (string) json_encode($body));
 
         return new self($method, $path, $query, $raw, $bearerToken);
     }
