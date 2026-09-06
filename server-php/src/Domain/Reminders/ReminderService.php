@@ -426,9 +426,11 @@ final class ReminderService
      * this: the rows are returned, `notified_at` records that they were handed
      * out, and delivery is a caller's job once a channel exists.
      *
-     * Claiming is one statement with `FOR UPDATE SKIP LOCKED`, so two workers
-     * in the same minute — the normal state of affairs under cron — split the
-     * batch instead of both delivering it.
+     * Claiming is one statement with `FOR UPDATE OF due SKIP LOCKED`, so two
+     * workers in the same minute — the normal state of affairs under cron —
+     * split the batch instead of both delivering it. `OF due` narrows the lock
+     * to the reminder rows: locking the joined notes as well would block
+     * whoever is editing one while the dispatcher runs.
      *
      * There is no {@see Identity} here on purpose: a worker acts for nobody, so
      * the caller-scoped access CTE cannot apply. The gate that does apply is

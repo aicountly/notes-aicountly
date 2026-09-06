@@ -75,10 +75,14 @@ export function TagPicker({
       .map<Suggestion>((tag) => ({ kind: 'tag', tag }))
 
     // Offered only when the typed name is not already a tag and not already
-    // applied — "Create gst" under an existing gst is a lie.
+    // applied — "Create gst" under an existing gst is a lie. It goes *after*
+    // the matches on purpose: typing "urg" and pressing Enter should reach
+    // "urgent", not mint a near-duplicate of it, which is how a tag list turns
+    // into a mess. With nothing to match it is the only row, so Enter still
+    // makes the tag in one gesture.
     const exists = (tags.data ?? []).some((tag) => tag.slug === needle)
     if (needle !== '' && !exists && !appliedSlugs.has(needle)) {
-      return [{ kind: 'create', name: tagDisplayName(query) }, ...matches]
+      return [...matches, { kind: 'create', name: tagDisplayName(query) }]
     }
 
     return matches

@@ -36,8 +36,8 @@ final class PromptBundle
     public const ROLE_SYSTEM = 'system';
     public const ROLE_USER = 'user';
 
-    /** A single source block. Long enough for a section, short enough that ten fit. */
-    private const MAX_ITEM_CHARS = 6000;
+    /** A single source block: a retrieval chunk is ~1 200 characters, a whole note far more. */
+    private const MAX_ITEM_CHARS = 20000;
 
     /** The whole context. Past this the oldest-ranked blocks are dropped rather than truncated mid-note. */
     private const MAX_CONTEXT_CHARS = 24000;
