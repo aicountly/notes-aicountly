@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import TemplatesPage from './TemplatesPage'
+import { DEFAULT_NOTEBOOK_KEY } from '../../settings/preferences'
 import type { NoteDocument, NoteTemplate } from '../../../shared/api/types'
 
 vi.mock('../../../auth/portal', () => ({ ensureSesKey: async () => 'test-session-key' }))
@@ -140,6 +141,7 @@ function respond(templates: NoteTemplate[] = TEMPLATES) {
 
 beforeEach(() => {
   features.canvas = false
+  window.localStorage.clear()
   fetchMock.mockImplementation(respond())
   globalThis.fetch = fetchMock as unknown as typeof fetch
 })
@@ -330,6 +332,107 @@ describe('TemplatesPage', () => {
       'Templates are unavailable on this deployment.',
     )
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument()
+  })
+
+  it('files the note in the notebook the user chose, exactly as the picker does', async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(DEFAULT_NOTEBOOK_KEY, 'nb-inbox')
+    renderPage()
+
+    await user.click(within(await card('Weekly review')).getByRole('button', { name: 'Use template' }))
+    await waitFor(() => expect(writes('POST')).toHaveLength(1))
+
+    expect(JSON.parse(String(writes('POST')[0][1].body))).toMatchObject({ notebook_id: 'nb-inbox' })
+  })
+
+  it('shows a failed start inside the preview, not on the page behind it', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      if (String(input).includes('/create-note')) {
+        return failure(403, 'FEATURE_DISABLED', 'Notes cannot be created right now.')
+      }
+      return respond()(input, init)
+    })
+    renderPage()
+
+    await user.click(within(await card('Weekly review')).getByRole('button', { name: 'Preview' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Use template' }))
+
+    // Inside the dialog: a notice under the overlay is a notice nobody reads.
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Notes cannot be created right now.',
+    )
+  })
+
+  it('reports a rejection this form has no field to put it beside', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = String(input)
+      if ((init?.method ?? 'GET') === 'POST' && url.endsWith('/templates')) {
+        return {
+          ok: false,
+          status: 422,
+          text: async () =>
+            JSON.stringify({
+              success: false,
+              error: {
+                code: 'VALIDATION_FAILED',
+                message: 'That template could not be saved.',
+                details: { fields: { note_type: 'Unknown note type.' } },
+              },
+            }),
+        } as unknown as Response
+      }
+      return respond()(input, init)
+    })
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'New template' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByLabelText('Name'), 'Weekly')
+    await user.click(within(dialog).getByRole('button', { name: 'Create template' }))
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'That template could not be saved.',
+    )
+  })
+
+  it('still saves a canvas template where canvas is off, because the server does', async () => {
+    const user = userEvent.setup()
+    fetchMock.mockImplementation(
+      respond([
+        template({
+          id: 't-canvas',
+          name: 'Launch canvas',
+          scope: 'user',
+          note_type: 'canvas',
+          editable: true,
+        }),
+      ]),
+    )
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Actions for Launch canvas' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Edit template' }))
+
+    const dialog = await screen.findByRole('dialog')
+    // The flag is a fact about what the template can do, not a reason to
+    // refuse the rename: NoteTemplateService does not check feature flags.
+    expect(
+      within(dialog).getByText(/no note can be started from it until canvas is switched on/i),
+    ).toBeInTheDocument()
+
+    const save = within(dialog).getByRole('button', { name: 'Save template' })
+    expect(save).toBeEnabled()
+
+    await user.clear(within(dialog).getByLabelText('Name'))
+    await user.type(within(dialog).getByLabelText('Name'), 'Launch board')
+    await user.click(save)
+
+    await waitFor(() => expect(writes('PATCH')).toHaveLength(1))
+    expect(writes('PATCH')[0][0]).toContain('/templates/t-canvas')
+    expect(JSON.parse(String(writes('PATCH')[0][1].body))).toMatchObject({ name: 'Launch board' })
   })
 
   it('offers a first template when there are none', async () => {

@@ -16,6 +16,13 @@
  * A template's body cannot be edited here. There is no document editor in this
  * dialog and inventing half of one would be worse than saying so: the way to
  * change what a template writes is to save the note you want as a new template.
+ *
+ * Nothing here is blocked by a feature flag. `NoteTemplateService::noteType()`
+ * deliberately does not check them — a template is configuration, and a
+ * deployment that switches canvas on next month should find its canvas template
+ * waiting — so refusing to save one would refuse an edit the server accepts.
+ * The flag is stated as a consequence ("no note can be started from it here"),
+ * which is a fact about {@link CANVAS_OFF}, not a reason to disable Save.
  */
 
 import { useEffect, useId, useState } from 'react'
@@ -94,13 +101,30 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
 
   const busy = create.isPending || update.isPending
   const fieldErrors = error instanceof ApiError ? error.fieldErrors : {}
+  // A 422 names the fields it rejected. This form shows `name` and `scope`
+  // beside their controls; anything else it has nowhere to put — `note_type`,
+  // `timezone`, a field a later server adds — so the notice at the top carries
+  // it. A failure the user cannot see is the one outcome a save must not have.
+  const unplaceable = Object.keys(fieldErrors).filter(
+    (field) => field !== 'name' && field !== 'scope',
+  )
+  const showNotice = error !== null && (Object.keys(fieldErrors).length === 0 || unplaceable.length > 0)
   const trimmed = name.trim()
   const fromNote = fromNoteId !== ''
-  const canvasBlocked = noteType === 'canvas' && !canvasEnabled
-  const hasCompany = profile?.tenant_id !== null && profile?.tenant_id !== undefined
+  // The note type only travels when this form is the one deciding it; a
+  // save-as-template lets the note's own type win.
+  const typeApplies = editing || !fromNote
+  // Said, not enforced: the server saves a canvas template whatever the flag
+  // says, and refusing to would strand the owner of one with no way to rename
+  // it. What is true is that no note can be started from it here.
+  const canvasOff = typeApplies && noteType === 'canvas' && !canvasEnabled
+  // Null until `GET /session` answers, which is a separate, non-blocking
+  // request — and "we have not been told yet" is not "you have no company".
+  const companyKnown = profile !== null
+  const hasCompany = companyKnown && profile.tenant_id !== null
 
   const submit = () => {
-    if (trimmed === '' || busy || canvasBlocked) return
+    if (trimmed === '' || busy) return
     setError(null)
 
     const shared = {
@@ -157,8 +181,7 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
             variant="primary"
             icon="check"
             loading={busy}
-            disabled={trimmed === '' || canvasBlocked}
-            title={canvasBlocked ? CANVAS_OFF : undefined}
+            disabled={trimmed === ''}
             onClick={submit}
           >
             {editing ? 'Save template' : 'Create template'}
@@ -167,7 +190,7 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
       }
     >
       <div className="org-form">
-        {error && Object.keys(fieldErrors).length === 0 ? <ErrorNotice error={error} /> : null}
+        {showNotice ? <ErrorNotice error={error} /> : null}
 
         <div className="org-field">
           <label className="org-label" htmlFor={nameId}>
@@ -183,10 +206,11 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
             disabled={busy}
             data-autofocus=""
             aria-invalid={fieldErrors.name !== undefined}
+            aria-describedby={fieldErrors.name ? `${nameId}-error` : undefined}
             onChange={(event) => setName(event.target.value)}
           />
           {fieldErrors.name ? (
-            <p className="org-error" role="alert">
+            <p className="org-error" role="alert" id={`${nameId}-error`}>
               {fieldErrors.name}
             </p>
           ) : null}
@@ -209,7 +233,7 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
 
         <IconField value={icon} fallback="template" disabled={busy} onChange={setIcon} />
 
-        {editing || !fromNote ? (
+        {typeApplies ? (
           <div className="org-field">
             <label className="org-label" htmlFor={typeId}>
               Note type
@@ -235,9 +259,12 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
                 </option>
               ))}
             </select>
-            {canvasBlocked ? (
-              <p className="org-error" role="alert">
-                {CANVAS_OFF}
+            {canvasOff ? (
+              /* A hint rather than an error: the template saves either way, and
+                 what the person needs to know is what it cannot do yet. */
+              <p className="org-hint">
+                <Icon name="info" size={13} /> {CANVAS_OFF} This template still saves, but no note
+                can be started from it until canvas is switched on.
               </p>
             ) : null}
           </div>
@@ -318,17 +345,24 @@ export function TemplateDialog({ open, template = null, onClose, onSaved }: Temp
                     name={scopeName}
                     value="tenant"
                     checked={scope === 'tenant'}
-                    // The server refuses a company template from someone who is
-                    // not signed in to one, so the choice is closed here.
-                    disabled={busy || !hasCompany}
+                    // Closed only once the server has said there is no company.
+                    // While the profile is still on its way the choice stays
+                    // open and the server has the last word — which it now gets
+                    // to say out loud, below.
+                    disabled={busy || (companyKnown && !hasCompany)}
                     onChange={() => setScope('tenant')}
                   />
                   Everyone at my company
                 </label>
               </div>
-              {!hasCompany ? (
+              {companyKnown && !hasCompany ? (
                 <p className="org-hint">
                   You are not signed in to a company, so this template can only be your own.
+                </p>
+              ) : null}
+              {fieldErrors.scope ? (
+                <p className="org-error" role="alert">
+                  {fieldErrors.scope}
                 </p>
               ) : null}
             </fieldset>

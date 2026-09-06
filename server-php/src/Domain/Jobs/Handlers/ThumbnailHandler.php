@@ -18,6 +18,12 @@ use Aicountly\Api\Domain\Jobs\JobHandler;
  *     source is a few hundred kilobytes on disk and roughly 160 MB once GD has
  *     it in memory, which is how a decompression bomb takes a shared host down.
  *     `getimagesizefromstring()` costs nothing and answers first.
+ *   - **"We cannot read this format" is never reported as "this is not an
+ *     image."** HEIC is what an iPhone camera produces and PHP has no reader
+ *     for it at all; TIFF has none in GD. Both make `getimagesizefromstring()`
+ *     answer `false` — exactly as a truncated PNG would — and calling that a
+ *     corrupt file would put a red "failed" on a perfectly good photograph.
+ *     What the build can decode is asked of the build, up front.
  *   - **The thumbnail is a separate object with its own key.** It is not
  *     derived from the original's key, so nothing can be reached by guessing at
  *     a suffix, and the purge job deletes both keys from the row it reads.
@@ -53,12 +59,21 @@ final class ThumbnailHandler implements JobHandler
             // simply cannot make previews, and no number of retries changes it.
             return ['outcome' => self::SKIPPED, 'reason' => 'gd_unavailable'];
         }
+        if (!self::gdCanDecode((string) $attachment['mime_type'])) {
+            // Asked before the bytes are fetched, because the answer does not
+            // depend on them: reading a 12 MB photo off the store to discover
+            // this build has no decoder for its format is work nobody asked
+            // for, and the file is not at fault either way.
+            return ['outcome' => self::SKIPPED, 'reason' => 'format_unsupported_by_gd'];
+        }
 
         $store = $this->attachments->storeFor($attachment);
         $bytes = $store->get((string) $attachment['storage_key']);
 
         $size = @getimagesizefromstring($bytes);
         if ($size === false) {
+            // A format this build *does* read, that still would not parse —
+            // so the bytes really are not the picture they claim to be.
             return ['outcome' => self::PERMANENT_FAILURE, 'reason' => 'not_an_image'];
         }
 
@@ -102,8 +117,14 @@ final class ThumbnailHandler implements JobHandler
             return ['outcome' => self::SKIPPED, 'reason' => 'encode_failed'];
         }
 
-        $thumbnailKey = $store->allocateKey();
-        $store->put($thumbnailKey, $encoded, $keepsAlpha ? 'image/png' : 'image/jpeg');
+        // The key comes back from the write: a store that allocates its own
+        // addresses — Drive does — only names the object once it has it.
+        $thumbnailKey = $store->put(
+            $store->allocateKey(),
+            $encoded,
+            $keepsAlpha ? 'image/png' : 'image/jpeg',
+            'thumbnail.' . ($keepsAlpha ? 'png' : 'jpg'),
+        );
 
         $this->attachments->recordMedia((string) $attachment['id'], [
             'width' => $width,
@@ -117,6 +138,32 @@ final class ThumbnailHandler implements JobHandler
             'height' => $height,
             'thumbnail_bytes' => strlen($encoded),
         ];
+    }
+
+    /**
+     * Can this build read this format at all?
+     *
+     * `imagetypes()` answers for the deployment rather than for the file, which
+     * is the question worth asking: a host built without WebP and a host
+     * without an AVIF decoder are ordinary, and so is one meeting a `.heic`
+     * that no PHP build can open. Anything not on this list has no GD reader,
+     * so there is nothing to try.
+     */
+    private static function gdCanDecode(string $mimeType): bool
+    {
+        $bit = match ($mimeType) {
+            'image/jpeg' => IMG_JPG,
+            'image/png' => IMG_PNG,
+            'image/gif' => IMG_GIF,
+            'image/webp' => IMG_WEBP,
+            'image/bmp' => IMG_BMP,
+            // Added in PHP 8.1, and only when GD was built with libavif.
+            'image/avif' => defined('IMG_AVIF') ? IMG_AVIF : 0,
+            // HEIC, HEIF and TIFF: no reader in GD, on any build.
+            default => 0,
+        };
+
+        return $bit !== 0 && (imagetypes() & $bit) === $bit;
     }
 
     /** Encode through a memory stream rather than an output buffer: the worker's stdout is a log. */

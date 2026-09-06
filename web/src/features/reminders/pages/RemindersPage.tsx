@@ -27,6 +27,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
+import { ApiError } from '../../../shared/api/client'
 import { Icon } from '../../../shared/ui/Icon'
 import { Badge, Button, EmptyState, LiveStatus, Skeleton } from '../../../shared/ui/primitives'
 import { ErrorNotice } from '../../organise/ErrorNotice'
@@ -46,13 +47,34 @@ import {
 import type { ReminderRow, ReminderScope, SnoozeInput } from '../hooks/useReminders'
 import '../reminders.css'
 
+/**
+ * A refusal, said the way the server said it.
+ *
+ * A 422's own message is the generic "Some fields need attention." — the
+ * sentence the user can act on ("Snooze by 1 to 43200 minutes", "A completed
+ * reminder cannot be snoozed") is in `details.fields` beside it. Without this
+ * every rejected snooze or completion reads as the same blank shrug. The code
+ * is carried over so the notice still knows an offline error when it sees one.
+ */
+function readable(error: unknown): unknown {
+  if (!(error instanceof ApiError)) return error
+
+  const fields = Object.values(error.fieldErrors)
+
+  return fields.length === 0 ? error : new ApiError(error.code, fields.join(' '), error.status, error.details)
+}
+
 export default function RemindersPage() {
   const [scope, setScope] = useState<ReminderScope>('all')
   const reminders = useReminders(scope)
 
   const [editing, setEditing] = useState<ReminderRow | null>(null)
-  /** What just happened, announced once and shown on the row it happened to. */
-  const [outcome, setOutcome] = useState<{ id: string; message: string } | null>(null)
+  /**
+   * What just happened. Always announced; shown on the row it happened to when
+   * there still is one — a deletion has no row left to write on, so it carries
+   * a null id and is heard rather than seen.
+   */
+  const [outcome, setOutcome] = useState<{ id: string | null; message: string } | null>(null)
   const [actionError, setActionError] = useState<unknown>(null)
 
   const complete = useCompleteReminder()
@@ -62,8 +84,24 @@ export default function RemindersPage() {
   const navigate = useNavigate()
   const rows = reminders.data ?? []
   const groups = groupReminders(rows)
-  const busyId = complete.variables ?? snooze.variables?.id ?? remove.variables ?? null
-  const busy = complete.isPending || snooze.isPending || remove.isPending
+
+  /**
+   * Which row is being changed right now.
+   *
+   * Read from the mutation that is actually running: a settled mutation keeps
+   * its `variables`, so taking the first one that has any would put the busy
+   * state on whichever row was touched *last* rather than the one being
+   * touched now — and then disable it.
+   */
+  const busyId = complete.isPending
+    ? complete.variables
+    : snooze.isPending
+      ? snooze.variables?.id
+      : remove.isPending
+        ? remove.variables
+        : undefined
+
+  const fail = (error: unknown) => setActionError(readable(error))
 
   const onComplete = (reminder: ReminderRow) => {
     setActionError(null)
@@ -80,7 +118,7 @@ export default function RemindersPage() {
             : 'Done.',
         })
       })
-      .catch(setActionError)
+      .catch(fail)
   }
 
   const onSnooze = (reminder: ReminderRow, input: SnoozeInput) => {
@@ -90,13 +128,18 @@ export default function RemindersPage() {
       .then((saved) => {
         setOutcome({ id: reminder.id, message: `Snoozed — ${formatWhen(saved.due_effective_at)}.` })
       })
-      .catch(setActionError)
+      .catch(fail)
   }
 
   const onDelete = (reminder: ReminderRow) => {
     setActionError(null)
     setOutcome(null)
-    remove.mutateAsync(reminder.id).catch(setActionError)
+    remove
+      .mutateAsync(reminder.id)
+      // The row goes; without this the only feedback is a gap in a list nobody
+      // was looking at, and a screen reader hears nothing at all.
+      .then(() => setOutcome({ id: null, message: `Deleted the reminder for ${reminder.note_display_title}.` }))
+      .catch(fail)
   }
 
   return (
@@ -178,8 +221,11 @@ export default function RemindersPage() {
                   reminder={reminder}
                   overdue={group.key === 'overdue'}
                   outcome={outcome?.id === reminder.id ? outcome.message : null}
-                  busy={busy && busyId === reminder.id}
-                  disabled={busy}
+                  // Only the row being changed goes quiet. Disabling every row
+                  // while one of them saves makes the whole page dead for the
+                  // length of a request, and takes focus off whatever the user
+                  // was on when it does.
+                  busy={busyId === reminder.id}
                   onComplete={() => onComplete(reminder)}
                   onSnooze={(input) => onSnooze(reminder, input)}
                   onEdit={() => {
@@ -216,7 +262,6 @@ function ReminderRowView({
   overdue,
   outcome,
   busy,
-  disabled,
   onComplete,
   onSnooze,
   onEdit,
@@ -225,8 +270,8 @@ function ReminderRowView({
   reminder: ReminderRow
   overdue: boolean
   outcome: string | null
+  /** This reminder has a change in flight. Other rows stay usable. */
   busy: boolean
-  disabled: boolean
   onComplete: () => void
   onSnooze: (input: SnoozeInput) => void
   onEdit: () => void
@@ -243,7 +288,7 @@ function ReminderRowView({
         <button
           type="button"
           className="reminder__complete"
-          disabled={disabled}
+          disabled={busy}
           aria-busy={busy || undefined}
           // The recurring case is spelled out rather than left to be
           // discovered: pressing this does not make the reminder go away.
@@ -301,14 +346,14 @@ function ReminderRowView({
       <div className="reminder__actions">
         {open ? (
           <>
-            <SnoozeMenu title={title} disabled={disabled} busy={busy} onSnooze={onSnooze} />
+            <SnoozeMenu title={title} busy={busy} onSnooze={onSnooze} />
             <Button
               icon="draw"
               iconOnly
               size="sm"
               variant="ghost"
               aria-label={`Change when to be reminded about ${title}`}
-              disabled={disabled}
+              disabled={busy}
               onClick={onEdit}
             />
           </>
@@ -318,7 +363,7 @@ function ReminderRowView({
             size="sm"
             variant="ghost"
             aria-label={`Set a new time for the reminder about ${title}`}
-            disabled={disabled}
+            disabled={busy}
             onClick={onEdit}
           >
             Reschedule
@@ -331,7 +376,7 @@ function ReminderRowView({
           size="sm"
           variant="ghost"
           aria-label={`Delete the reminder for ${title}`}
-          disabled={disabled}
+          disabled={busy}
           onClick={onDelete}
         />
       </div>
@@ -353,17 +398,21 @@ function ReminderRowView({
  *
  * A popup rather than a menu, because the fourth choice is a small form and a
  * `role="menu"` with text inputs in it is a menu screen readers cannot describe.
- * It still behaves: focus moves in on open, Escape closes it and puts focus
- * back on the trigger, and a press anywhere outside dismisses it.
+ * It still behaves: focus moves in on open, and every way out of it — Escape,
+ * choosing one of the three, or setting a time — closes the popup and puts
+ * focus back on the trigger rather than dropping it on the body. A press
+ * anywhere outside dismisses it, and focus follows the press.
+ *
+ * The trigger is never disabled, only marked busy: it is where focus has to
+ * land when the popup closes, and a button that is disabled at that moment is
+ * a button focus falls straight off.
  */
 function SnoozeMenu({
   title,
-  disabled,
   busy,
   onSnooze,
 }: {
   title: string
-  disabled: boolean
   busy: boolean
   onSnooze: (input: SnoozeInput) => void
 }) {
@@ -422,7 +471,7 @@ function SnoozeMenu({
       setError('Snoozing moves a reminder forwards — pick a time still to come.')
       return
     }
-    setOpen(false)
+    close()
     onSnooze({ until: until.toISOString() })
   }
 
@@ -441,7 +490,6 @@ function SnoozeMenu({
         ref={triggerRef}
         type="button"
         className="btn btn--ghost btn--sm"
-        disabled={disabled}
         aria-busy={busy || undefined}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -465,7 +513,7 @@ function SnoozeMenu({
               type="button"
               className="snooze__option"
               onClick={() => {
-                setOpen(false)
+                close()
                 onSnooze(choice.input(new Date()))
               }}
             >

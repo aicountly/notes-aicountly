@@ -183,7 +183,7 @@ export function NotebookTree({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       </div>
 
-      {actionError ? <ErrorNotice error={actionError} /> : null}
+      {actionError ? <ErrorNotice error={actionError} onDismiss={() => setActionError(null)} /> : null}
 
       {notebooks.isPending ? (
         <div className="org-skeletons" aria-hidden>
@@ -375,7 +375,10 @@ function NotebookBranch({ node, level, expanded, busy, onToggle, onNavigate, onA
       key: 'archive',
       label: node.is_archived ? 'Move out of archive' : 'Archive',
       icon: 'archive',
-      disabledReason: can.manage_members ? undefined : 'Owner only',
+      // Its own capability, not `edit` and not `manage_members`: archiving
+      // hides the whole branch from everyone it is shared with, which is the
+      // owner's call. See NotebookService::present().
+      disabledReason: can.archive ? undefined : 'Owner only',
       onSelect: () => onArchive(node, !node.is_archived),
     },
     {

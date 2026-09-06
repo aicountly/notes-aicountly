@@ -10,7 +10,7 @@
  * through `aria-activedescendant` on the editor itself (see NoteEditor).
  */
 
-import { Fragment, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { Icon } from '../../shared/ui/Icon'
 import type { SuggestionMenuItem } from './extensions/suggestionBridge'
@@ -70,8 +70,66 @@ export function SlashCommandMenu({
     setPlacement({ top, left })
   }, [rect, items.length, loading])
 
+  /**
+   * Keep the highlighted row on screen.
+   *
+   * The panel is capped at a few hundred pixels and there are more blocks than
+   * that fits, so arrowing past the fold would otherwise highlight a row the
+   * writer cannot see — the keyboard path would be driving a list blind.
+   * `block: 'nearest'` scrolls the panel only when the row is actually out of
+   * view, and never moves the page behind it.
+   */
+  useEffect(() => {
+    panel.current
+      ?.querySelector<HTMLElement>('[data-active="true"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, items])
+
   const activeId = items[activeIndex] ? `${idPrefix}-option-${activeIndex}` : undefined
-  let renderedGroup: string | undefined
+
+  // Consecutive runs of one group, so the heading can wrap the rows it names.
+  // A bare `role="presentation"` heading is invisible to a screen reader, which
+  // would leave "Heading 1" and "Table" in one undifferentiated list.
+  const groups: { heading: string | null; entries: { item: SuggestionMenuItem; index: number }[] }[] =
+    []
+  items.forEach((item, index) => {
+    const heading = item.group ?? null
+    const last = groups[groups.length - 1]
+    if (last && last.heading === heading) last.entries.push({ item, index })
+    else groups.push({ heading, entries: [{ item, index }] })
+  })
+
+  const option = (item: SuggestionMenuItem, index: number) => (
+    <button
+      key={item.id}
+      type="button"
+      id={`${idPrefix}-option-${index}`}
+      role="option"
+      aria-selected={index === activeIndex}
+      data-active={index === activeIndex}
+      // Focus belongs to the caret for as long as this is open; a row that
+      // could be tabbed to would take the selection out of the note.
+      tabIndex={-1}
+      className={`slash-menu__item ${index === activeIndex ? 'slash-menu__item--active' : ''}`}
+      onMouseEnter={() => onHover(index)}
+      // The caret must not leave the editor, so the press is taken on
+      // mousedown and the default focus move is prevented.
+      onMouseDown={(event) => {
+        event.preventDefault()
+        onSelect(item.id)
+      }}
+    >
+      {item.icon ? (
+        <span className="slash-menu__icon" aria-hidden>
+          <Icon name={item.icon} size={16} />
+        </span>
+      ) : null}
+      <span className="slash-menu__text">
+        <span className="slash-menu__label">{item.label}</span>
+        {item.hint ? <span className="slash-menu__hint">{item.hint}</span> : null}
+      </span>
+    </button>
+  )
 
   return (
     <div
@@ -93,44 +151,26 @@ export function SlashCommandMenu({
       {items.length === 0 ? (
         <p className="slash-menu__empty">{loading ? 'Searching…' : emptyMessage}</p>
       ) : (
-        items.map((item, index) => {
-          const heading = item.group && item.group !== renderedGroup ? item.group : null
-          if (heading) renderedGroup = item.group
-
-          return (
-            <Fragment key={item.id}>
-              {heading ? (
-                <p className="slash-menu__group-label" role="presentation">
-                  {heading}
-                </p>
-              ) : null}
-              <button
-                type="button"
-                id={`${idPrefix}-option-${index}`}
-                role="option"
-                aria-selected={index === activeIndex}
-                className={`slash-menu__item ${index === activeIndex ? 'slash-menu__item--active' : ''}`}
-                onMouseEnter={() => onHover(index)}
-                // The caret must not leave the editor, so the press is taken on
-                // mousedown and the default focus move is prevented.
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  onSelect(item.id)
-                }}
-              >
-                {item.icon ? (
-                  <span className="slash-menu__icon" aria-hidden>
-                    <Icon name={item.icon} size={16} />
-                  </span>
-                ) : null}
-                <span className="slash-menu__text">
-                  <span className="slash-menu__label">{item.label}</span>
-                  {item.hint ? <span className="slash-menu__hint">{item.hint}</span> : null}
-                </span>
-              </button>
+        groups.map((group) =>
+          group.heading ? (
+            <div
+              key={`group-${group.entries[0].index}`}
+              role="group"
+              aria-label={group.heading}
+            >
+              {/* The name is on the group; repeating it as a text node would
+                  have a screen reader read every heading twice. */}
+              <p className="slash-menu__group-label" aria-hidden="true">
+                {group.heading}
+              </p>
+              {group.entries.map(({ item, index }) => option(item, index))}
+            </div>
+          ) : (
+            <Fragment key={`group-${group.entries[0].index}`}>
+              {group.entries.map(({ item, index }) => option(item, index))}
             </Fragment>
-          )
-        })
+          ),
+        )
       )}
     </div>
   )

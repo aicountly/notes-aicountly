@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Aicountly\Api\Tests\Cases;
 
+use Aicountly\Api\Auth\Identity;
+use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Support\Uuid;
 use Aicountly\Api\Tests\ApiClient;
 use Aicountly\Api\Tests\Support;
@@ -261,6 +263,96 @@ final class SharingTest extends TestCase
         // Revocation is deliberately outside the bucket: an owner who has been
         // busy sharing must still be able to close a note.
         $this->assertSame(204, $this->alice->delete('/notes/' . $note['id'] . '/members/user-b')['status']);
+    }
+
+    /**
+     * The same person, spelled two ways, is one grant.
+     *
+     * The front controller lower-cases the request path, so `DELETE
+     * .../members/User-B` and a POST carrying `"user-b"` are the same person
+     * arriving through two doors. Matching exactly on the way in while matching
+     * case-insensitively on the way out let both rows exist at once — and then
+     * "change them to viewer" edited one while the editor grant stayed live.
+     */
+    public function testResharingWithADifferentlyCasedIdChangesTheGrantRatherThanAddingASecond(): void
+    {
+        $note = $this->note();
+        $this->share($note['id'], 'user-b', 'editor');
+        $this->assertSame(200, $this->bob->patch('/notes/' . $note['id'], ['title' => 'Bob edits'])['status']);
+
+        $downgraded = $this->share($note['id'], 'User-B', 'viewer');
+        $this->assertSame(200, $downgraded['status'], 'the second spelling is a role change, not a new member');
+        $this->assertSame('viewer', $downgraded['body']['data']['role']);
+
+        // The answer said viewer, so viewer is what Bob must have.
+        $this->assertSame(403, $this->bob->patch('/notes/' . $note['id'], ['title' => 'Bob edits again'])['status']);
+
+        $members = $this->alice->get('/notes/' . $note['id'] . '/members')['body']['data'];
+        $this->assertCount(2, $members, 'one owner, one member — nobody appears twice');
+        $rows = Connection::select(
+            'SELECT role FROM note_members WHERE note_id = :n',
+            ['n' => $note['id']],
+        );
+        $this->assertCount(1, $rows);
+        $this->assertSame('viewer', $rows[0]['role']);
+    }
+
+    /**
+     * A NUL byte is legal JSON and the end of a C string.
+     *
+     * PDO hands parameters to libpq as C strings, so `"user-b\0not-bob"` was
+     * stored as `user-b` — a grant to somebody other than the id that was sent,
+     * with nothing on screen to say so.
+     */
+    public function testAMemberIdIsNotSilentlyTruncatedAtAControlCharacter(): void
+    {
+        $note = $this->note();
+
+        $granted = $this->share($note['id'], "user-b\u{0000}not-bob", 'editor');
+        $this->assertSame(201, $granted['status']);
+        $this->assertSame('user-bnot-bob', $granted['body']['data']['user_id'], 'stored whole, or not at all');
+        $this->assertSame(404, $this->bob->get('/notes/' . $note['id'])['status'], 'user-b was never invited');
+
+        // A portal id is text or a number; `true` is not one, and casting it
+        // would grant the note to whoever happens to be user "1".
+        $this->assertSame(422, $this->alice->post(
+            '/notes/' . $note['id'] . '/members',
+            ['user_id' => true, 'role' => 'viewer'],
+        )['status']);
+        $this->assertSame(422, $this->share($note['id'], "\u{0000}\u{0007}", 'viewer')['status']);
+    }
+
+    /**
+     * A membership row does not cross a company boundary.
+     *
+     * The grant and the tenant gate are two independent conditions in
+     * NoteAccess, and this is the case that tells them apart: Bob holds a real
+     * `note_members` row and is still refused, because he is acting in a
+     * company the note does not belong to.
+     */
+    public function testAGrantDoesNotReachAcrossACompanyBoundary(): void
+    {
+        $inCompanyOne = new ApiClient(new Identity('user-a', 'company-1'));
+        $note = $inCompanyOne->post('/notes', [
+            'title' => 'Board pack',
+            'document' => Support::doc('numbers for company one'),
+        ])['body']['data'];
+        $this->assertSame(201, $inCompanyOne->post(
+            '/notes/' . $note['id'] . '/members',
+            ['user_id' => 'user-b', 'role' => 'editor'],
+        )['status']);
+
+        $elsewhere = new ApiClient(new Identity('user-b', 'company-2'));
+        $this->assertSame(404, $elsewhere->get('/notes/' . $note['id'] . '/members')['status']);
+        $this->assertSame(404, $elsewhere->get('/notes/' . $note['id'] . '/comments')['status']);
+        $this->assertSame(404, $elsewhere->post(
+            '/notes/' . $note['id'] . '/members',
+            ['user_id' => 'user-c', 'role' => 'viewer'],
+        )['status']);
+
+        // The same person, acting in the company the note belongs to, is in.
+        $inCompanyOneToo = new ApiClient(new Identity('user-b', 'company-1'));
+        $this->assertSame(200, $inCompanyOneToo->get('/notes/' . $note['id'] . '/members')['status']);
     }
 
     public function testAMalformedNoteIdIsNotFoundRatherThanAServerError(): void

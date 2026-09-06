@@ -119,6 +119,39 @@ final class SiblingApiTest extends TestCase
         $this->assertSame('https://contacts.gh.aicountly.com/api', SiblingApi::apiBase('contacts', 'notes.gh.aicountly.com'));
     }
 
+    public function testAProductCodeIsNotAHostname(): void
+    {
+        // The three products whose code and host are spelled differently. The
+        // code goes in a request body and an object key; the host is where the
+        // socket opens. Deriving one from the other gives docs.aicountly.com,
+        // connect→chat.aicountly.com and buddy.aicountly.com — none of which
+        // resolve. See §10 of Drive's AICOUNTLY_DRIVE_STORAGE_ARCHITECTURE.md.
+        $this->assertSame('docs', SiblingApi::productCode('drive'));
+        $this->assertSame('docs', SiblingApi::productCode('docs'));
+        $this->assertSame('https://drive.aicountly.com', SiblingApi::origin('docs', 'notes.aicountly.com'));
+
+        $this->assertSame('chat', SiblingApi::productCode('connect'));
+        $this->assertSame('https://connect.aicountly.com', SiblingApi::origin('chat', 'notes.aicountly.com'));
+
+        $this->assertSame('buddy', SiblingApi::productCode('pulse'));
+        $this->assertSame('https://pulse.aicountly.com', SiblingApi::origin('buddy', 'notes.aicountly.com'));
+    }
+
+    public function testTheModelGatewayUrlIsNeverMistakenForPulsesOwnApi(): void
+    {
+        // PULSE_API_URL names the model gateway HttpPulseProvider posts
+        // completions to. Reading it as a sibling origin would send Notes'
+        // product calls to whatever gateway the AI feature is pointed at.
+        putenv('PULSE_API_URL=https://gateway.example.test/v1');
+
+        $this->assertSame(
+            'https://pulse.aicountly.com/api',
+            SiblingApi::apiBase('pulse', 'notes.aicountly.com'),
+        );
+
+        putenv('PULSE_API_URL');
+    }
+
     public function testAnUnknownProductIsAProgrammingError(): void
     {
         $threw = false;

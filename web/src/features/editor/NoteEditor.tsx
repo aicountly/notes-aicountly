@@ -102,6 +102,7 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
 
   const [title, setTitle] = useState(note.title ?? '')
   const [pasteError, setPasteError] = useState<string | null>(null)
+  const [pastingImage, setPastingImage] = useState(false)
   const [linkDialog, setLinkDialog] = useState<{ open: boolean; href: string }>({
     open: false,
     href: '',
@@ -175,8 +176,10 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
   const membersRef = useRef<{ noteId: string; people: Promise<MentionItem[]> } | null>(null)
   const mentionItemsRef = useRef(async (query: string): Promise<MentionItem[]> => {
     const noteId = loadedNoteId.current
-    if (membersRef.current?.noteId !== noteId) {
-      membersRef.current = {
+    let entry = membersRef.current
+
+    if (entry?.noteId !== noteId) {
+      const fresh: { noteId: string; people: Promise<MentionItem[]> } = {
         noteId,
         people: api
           .get<NoteMember[]>(`/notes/${noteId}/members`)
@@ -189,12 +192,19 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
             })),
           )
           // A suggestion list is not the place to report a failed request:
-          // an empty menu says "nobody to mention" and stays out of the way.
-          .catch(() => []),
+          // an empty menu stays out of the way. But the *failure* is not
+          // cached — leaving it in place would turn one dropped request into
+          // an `@` menu that is empty for the rest of the session.
+          .catch(() => {
+            if (membersRef.current === fresh) membersRef.current = null
+            return []
+          }),
       }
+      membersRef.current = fresh
+      entry = fresh
     }
 
-    const people = await membersRef.current.people
+    const people = await entry.people
     const needle = query.toLowerCase()
     return people.filter((person) => person.label.toLowerCase().includes(needle)).slice(0, 8)
   })
@@ -275,6 +285,7 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
       PasteHandling.configure({
         uploadImage: () => uploadImageRef.current ?? null,
         onError: setPasteError,
+        onUploading: setPastingImage,
       }),
     ],
     [slashBridge, mentionBridge],
@@ -348,18 +359,21 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
 
   // The caret never leaves the editor while a suggestion menu is open, so the
   // editor is what has to tell a screen reader which row is highlighted.
+  //
+  // `aria-activedescendant` and `aria-controls` only: `aria-expanded` is not a
+  // state `role="textbox"` supports, and an unsupported attribute is one an
+  // audit flags and a screen reader ignores. The active row is what carries
+  // the information anyway.
   useEffect(() => {
     const dom = editor?.view.dom
     if (!dom) return
 
     if (!openMenu) {
-      dom.removeAttribute('aria-expanded')
       dom.removeAttribute('aria-controls')
       dom.removeAttribute('aria-activedescendant')
       return
     }
 
-    dom.setAttribute('aria-expanded', 'true')
     dom.setAttribute('aria-controls', openMenuId)
     dom.setAttribute('aria-activedescendant', `${openMenuId}-option-${openMenu.activeIndex}`)
   }, [editor, openMenu, openMenuId])
@@ -382,9 +396,12 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
     }),
   })
 
+  /** An emptied title is `null`, not `''` — the server reads the two differently. */
+  const storableTitle = (value: string) => (value.trim() === '' ? null : value)
+
   const onTitleChange = (value: string) => {
     setTitle(value)
-    autosave.schedule({ title: value.trim() === '' ? null : value })
+    autosave.schedule({ title: storableTitle(value) })
   }
 
   const conflict = autosave.conflict
@@ -395,6 +412,7 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
 
     loadedVersion.current = server.version
     setTitle(server.title ?? '')
+    setPasteError(null)
     applyContent(editor, server.document)
     autosave.resume(server.version, true)
     // The rest of the app is still holding the version that lost; give it the
@@ -405,7 +423,12 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
   const keepMyVersion = () => {
     const version = conflict?.serverVersion ?? note.version
     autosave.resume(version)
-    if (editor) autosave.schedule({ document: toStorableDocument(editor.getJSON()), title })
+    if (editor) {
+      autosave.schedule({
+        document: toStorableDocument(editor.getJSON()),
+        title: storableTitle(title),
+      })
+    }
     void autosave.flush()
   }
 
@@ -443,14 +466,19 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
           <span>{counts?.characters ?? 0} characters</span>
           {!canEdit ? <Badge tone="neutral">Read only</Badge> : null}
           {autosave.state === 'saving' ? <span>Saving…</span> : null}
+          {/* A pasted image goes up before it appears; without this the note
+              sits unchanged for as long as the upload takes. */}
+          {pastingImage ? <span>Adding image…</span> : null}
           <LiveStatus>
-            {autosave.state === 'saved'
-              ? 'Note saved'
-              : autosave.state === 'conflict'
-                ? 'This note was changed elsewhere'
-                : autosave.state === 'error'
-                  ? 'This note could not be saved'
-                  : ''}
+            {pastingImage
+              ? 'Adding image'
+              : autosave.state === 'saved'
+                ? 'Note saved'
+                : autosave.state === 'conflict'
+                  ? 'This note was changed elsewhere'
+                  : autosave.state === 'error'
+                    ? 'This note could not be saved'
+                    : ''}
           </LiveStatus>
         </div>
 
@@ -467,13 +495,18 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
             <div className="editor__banner-body">
               <p className="editor__banner-title">{conflict.message}</p>
               <p className="editor__banner-text">
-                Nothing has been overwritten. Choose which version to keep — your changes are
-                still here until you do.
+                {conflict.serverNote
+                  ? 'Nothing has been overwritten. Choose which version to keep — your changes are still here until you do.'
+                  : 'Nothing has been overwritten and your changes are still here. Their version did not come back with the refusal, so the only choice offered is to send yours over the top of it.'}
               </p>
               <div className="editor__banner-actions">
-                <Button size="sm" onClick={takeServerVersion} disabled={!conflict.serverNote}>
-                  Load their version
-                </Button>
+                {/* Rendered only when there is a copy to load. A button that
+                    could never do anything is worse than no button. */}
+                {conflict.serverNote ? (
+                  <Button size="sm" onClick={takeServerVersion}>
+                    Load their version
+                  </Button>
+                ) : null}
                 <Button size="sm" variant="primary" onClick={keepMyVersion}>
                   Keep mine
                 </Button>

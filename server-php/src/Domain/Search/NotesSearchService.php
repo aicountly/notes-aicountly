@@ -181,21 +181,19 @@ final class NotesSearchService
         $scopeClause = '';
         $bindings = [];
 
-        if (isset($scope['notebook_id']) && (string) $scope['notebook_id'] !== '') {
+        $notebookId = self::scopeId($scope, 'notebook_id', 'That is not a notebook id.');
+        if ($notebookId !== '') {
             // "May they read this notebook?" is answered in one place, and the
             // filter then follows its descendants the way the notes list does.
-            $this->permissions->requireNotebook($identity, (string) $scope['notebook_id']);
-            $filters->where('notebook', 'is', (string) $scope['notebook_id']);
+            $this->permissions->requireNotebook($identity, $notebookId);
+            $filters->where('notebook', 'is', $notebookId);
         }
 
-        if (isset($scope['note_id']) && (string) $scope['note_id'] !== '') {
-            $noteId = (string) $scope['note_id'];
-            if (!Uuid::isValid($noteId)) {
-                throw ApiException::badRequest('That is not a note id.');
-            }
+        $noteId = self::scopeId($scope, 'note_id', 'That is not a note id.');
+        if ($noteId !== '') {
             $this->permissions->requireNote($identity, $noteId, NotePermissionService::VIEW, columns: 'n.id');
             $scopeClause = ' AND n.id = :scope_note::uuid';
-            $bindings['scope_note'] = strtolower($noteId);
+            $bindings['scope_note'] = $noteId;
         }
 
         // Scoped to one note, the note *is* the corpus: "what did we decide?"
@@ -226,7 +224,13 @@ final class NotesSearchService
             'auth_user' => $identity->userId,
             'auth_tenant' => $identity->tenantId,
             'q' => $term,
-            'include_archived' => ($scope['include_archived'] ?? false) === true,
+            // Archiving decides what a *list* shows. A question asked of one
+            // note by name is not a list: the caller named that note and has
+            // just been authorised for it, so answering "nothing found" about
+            // the note on their screen would be a filter pretending to be an
+            // answer. The trash is different and stays excluded — a trashed
+            // note is a 404 in `requireNote` above, before this runs.
+            'include_archived' => ($scope['include_archived'] ?? false) === true || $scopeClause !== '',
             'body_chars' => self::RETRIEVAL_BODY_CHARS,
             'limit' => $candidateLimit,
         ] + $bindings + $filters->bindings());
@@ -609,12 +613,18 @@ final class NotesSearchService
         // Tags carry no note content and belong to exactly one user, so
         // ownership is the whole gate here — the access CTE has nothing to add
         // that `owner_user_id` does not already say.
-        $tags = Connection::select(
+        //
+        // Tags match on the *slug* of what was typed, and slugging drops
+        // punctuation: `%` and `!!!` both slug to nothing, and an empty prefix
+        // is `LIKE '%'` — every tag the user has, which is the opposite of a
+        // prefix lookup. Nothing to match on means nothing to suggest.
+        $tagPrefix = Str::tagSlug($term);
+        $tags = $tagPrefix === '' ? [] : Connection::select(
             'SELECT id, name, slug, color FROM tags
              WHERE owner_user_id = :auth_user AND slug LIKE :prefix::text
              ORDER BY slug
              LIMIT :limit',
-            ['auth_user' => $identity->userId, 'prefix' => self::likePattern(Str::tagSlug($term)), 'limit' => $limit],
+            ['auth_user' => $identity->userId, 'prefix' => self::likePattern($tagPrefix), 'limit' => $limit],
         );
 
         $notebooks = Connection::select(
@@ -724,9 +734,62 @@ final class NotesSearchService
         };
     }
 
+    /**
+     * One id out of a retrieval scope, validated.
+     *
+     * Both scope keys name a row by uuid, and both are checked the same way:
+     * a caller that hands over `['x']`, or a string that is not a uuid, gets a
+     * 400 rather than a `PDOException` from the uuid column it was about to be
+     * compared against.
+     *
+     * @param array<string, mixed> $scope
+     */
+    private static function scopeId(array $scope, string $key, string $message): string
+    {
+        $raw = $scope[$key] ?? null;
+        if ($raw === null || $raw === '') {
+            return '';
+        }
+        if (!is_scalar($raw) || !Uuid::isValid((string) $raw)) {
+            throw ApiException::badRequest($message);
+        }
+
+        return strtolower((string) $raw);
+    }
+
     private static function normaliseQuery(string $query): string
     {
-        return Str::limit(trim(preg_replace('/\s+/u', ' ', $query) ?? $query), self::MAX_QUERY_CHARS);
+        $text = self::utf8($query);
+
+        return Str::limit(trim(preg_replace('/\s+/u', ' ', $text) ?? $text), self::MAX_QUERY_CHARS);
+    }
+
+    /**
+     * Make a query safe to bind.
+     *
+     * A query arrives as bytes — from a URL, from a mobile keyboard, from a
+     * paste — and nothing upstream guarantees they are UTF-8. Postgres refuses
+     * a malformed sequence outright (`invalid byte sequence for encoding
+     * "UTF8"`), which turns one mistyped percent-escape into a 500 from the
+     * search box rather than a search that finds nothing. The invalid bytes are
+     * dropped here, so what reaches the query is always text, and the readable
+     * part of the query still searches. NUL is dropped for the same reason: it
+     * cannot appear in a Postgres text value at all.
+     */
+    private static function utf8(string $value): string
+    {
+        $value = str_replace("\0", '', $value);
+        if ($value === '' || preg_match('//u', $value) === 1) {
+            return $value;
+        }
+
+        $previous = mb_substitute_character();
+        mb_substitute_character(0xFFFD);
+        try {
+            return mb_convert_encoding($value, 'UTF-8', 'UTF-8');
+        } finally {
+            mb_substitute_character($previous);
+        }
     }
 
     /**

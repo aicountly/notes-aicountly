@@ -39,6 +39,33 @@ if (!str_contains($database, 'test')) {
 }
 putenv('DB_NAME=' . $database);
 
+/**
+ * Give this run its own object store.
+ *
+ * The database is not the only shared state a test touches: LocalObjectStore
+ * writes real files, and without this every run — including two running at once
+ * — shares `server-php/storage`. That is enough to make the purge tests flaky,
+ * because one run's cleanup deletes another's fixtures, and it leaves stray
+ * objects in the working tree afterwards.
+ *
+ * Keyed on the database name so a parallel run against its own database gets
+ * its own directory for free.
+ */
+$storage = sys_get_temp_dir() . '/notes-test-storage-' . preg_replace('/[^a-z0-9_]/i', '', $database);
+putenv('NOTES_STORAGE_PATH=' . $storage);
+
+// A leftover store from a previous run would make "the object is gone"
+// assertions pass for the wrong reason.
+if (is_dir($storage)) {
+    $entries = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($storage, \FilesystemIterator::SKIP_DOTS),
+        \RecursiveIteratorIterator::CHILD_FIRST,
+    );
+    foreach ($entries as $entry) {
+        $entry->isDir() ? @rmdir($entry->getPathname()) : @unlink($entry->getPathname());
+    }
+}
+
 try {
     (new Migrator(__DIR__ . '/../migrations'))->up();
 } catch (\Throwable $e) {

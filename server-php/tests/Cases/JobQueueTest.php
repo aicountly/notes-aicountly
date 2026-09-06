@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Aicountly\Api\Tests\Cases;
 
 use Aicountly\Api\Database\Connection;
+use Aicountly\Api\Domain\Jobs\Handlers\OcrHandler;
+use Aicountly\Api\Domain\Jobs\Handlers\RemoteEngine;
+use Aicountly\Api\Domain\Jobs\Handlers\TranscriptionHandler;
 use Aicountly\Api\Domain\Jobs\JobQueue;
 use Aicountly\Api\Domain\Jobs\Worker;
 use Aicountly\Api\Env;
@@ -611,5 +614,121 @@ final class JobQueueTest extends TestCase
             $this->assertFalse(str_contains($blob, 'confidential'));
             $this->assertFalse(str_contains($blob, 'merger'));
         }
+    }
+
+    public function testEveryDetachedFileIsPurgedNotJustTheFirst(): void
+    {
+        $note = $this->note();
+        $first = $this->attach($note['id'], 'one.txt', 'the first receipt, filed');
+        $second = $this->attach($note['id'], 'two.txt', 'the second receipt, filed');
+        $this->worker->run(20, 30);
+
+        $keys = array_column(Connection::select(
+            'SELECT storage_key FROM note_attachments WHERE note_id = :n ORDER BY created_at, id',
+            ['n' => $note['id']],
+        ), 'storage_key');
+        $this->assertCount(2, $keys);
+
+        $this->alice->delete('/notes/' . $note['id'] . '/attachments/' . $first['id']);
+        $this->alice->delete('/notes/' . $note['id'] . '/attachments/' . $second['id']);
+        $this->worker->run(20, 30);
+
+        // Two detached files are two purges. They carry different keys in their
+        // payloads, so folding the second into the first leaves somebody's
+        // "deleted" file sitting on the disk forever.
+        foreach ($keys as $key) {
+            $this->assertFalse(is_file($this->storage . '/' . $key), 'the bytes are gone: ' . $key);
+        }
+    }
+    // -- Engines that answer ------------------------------------------------
+
+    /**
+     * An engine that returns what a real one would, without a network.
+     *
+     * The skip paths are covered above; this is the other half — what the
+     * handlers do once something actually comes back.
+     */
+    private function engine(string $text, int $status = 200, array $segments = []): RemoteEngine
+    {
+        return new class ($text, $status, $segments) extends RemoteEngine {
+            public function __construct(
+                private readonly string $text,
+                private readonly int $status,
+                private readonly array $segments,
+            ) {
+                parent::__construct('ocr', 'NOTES_OCR_API_URL', 'NOTES_OCR_API_TOKEN');
+            }
+
+            public function available(): bool
+            {
+                return true;
+            }
+
+            public function process(string $filename, string $mimeType, string $bytes): array
+            {
+                return [
+                    'status' => $this->status,
+                    'text' => $this->text,
+                    'language' => 'en',
+                    'segments' => $this->segments,
+                    'model' => 'test-model',
+                ];
+            }
+        };
+    }
+
+    public function testOcrTextLandsOnTheAttachmentAndInTheNotesSearchIndex(): void
+    {
+        $note = $this->note('the quarterly numbers');
+        $attachment = $this->attach($note['id'], 'receipt.png', self::png());
+
+        $worker = new Worker([
+            JobQueue::OCR => new OcrHandler(engine: $this->engine('Zygomorphic hardware store receipt')),
+        ] + Worker::defaultHandlers());
+        $worker->run(10, 30);
+
+        $row = Connection::selectOne(
+            'SELECT extracted_text, processing_status FROM note_attachments WHERE id = :id',
+            ['id' => $attachment['id']],
+        );
+        $this->assertContainsString('Zygomorphic', (string) $row['extracted_text']);
+        $this->assertSame('completed', (string) $row['processing_status']);
+
+        // The rollup the OCR handler asks for has to have run, or the words are
+        // on the attachment and findable nowhere.
+        $this->assertContainsString('Zygomorphic', (string) Connection::selectOne(
+            'SELECT derived_text FROM notes WHERE id = :id',
+            ['id' => $note['id']],
+        )['derived_text']);
+        $this->assertCount(1, $this->alice->get('/notes', ['q' => 'zygomorphic'])['body']['data']);
+    }
+
+    public function testATranscriptIsRewrittenRatherThanFailingTheSecondTime(): void
+    {
+        $note = $this->note();
+        $attachment = $this->attach($note['id'], 'memo.wav', self::wav());
+
+        $handler = new TranscriptionHandler(engine: $this->engine('the board agreed to defer', segments: [
+            ['start' => 0, 'end' => 2, 'text' => 'the board agreed to defer'],
+        ]));
+        $worker = new Worker([JobQueue::TRANSCRIPTION => $handler] + Worker::defaultHandlers());
+        $worker->run(10, 30);
+
+        $this->assertCount(1, Connection::select('SELECT id FROM note_transcripts'));
+
+        // A worker killed after writing the transcript has its job handed back
+        // by the reaper, and the second attempt finds the row already there.
+        // That second attempt must update it, not fall over on it.
+        $jobId = (string) $this->queue->enqueue(Support::user('a'), JobQueue::TRANSCRIPTION, $note['id'], $attachment['id']);
+        $tally = $worker->run(10, 30);
+
+        $this->assertSame(0, $tally['failed'], 'the re-run did not fail');
+        $this->assertSame(0, $tally['retried'] ?? 0, 'and did not throw its way into a retry');
+        $this->assertSame('completed', (string) $this->job($jobId)['status']);
+        $this->assertCount(1, Connection::select('SELECT id FROM note_transcripts'), 'still one row per attachment');
+        $this->assertSame('completed', (string) Connection::selectOne(
+            'SELECT processing_status FROM note_attachments WHERE id = :id',
+            ['id' => $attachment['id']],
+        )['processing_status']);
     }
 }

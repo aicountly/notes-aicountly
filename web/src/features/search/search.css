@@ -248,7 +248,19 @@
   color: var(--notes-text-secondary);
 }
 
-.search__error { color: var(--notes-danger); }
+/* The icon is not decoration: it is what carries the message to a reader who
+   does not see the colour. */
+.search__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  color: var(--notes-danger);
+}
+
+.search__error svg { flex: none; margin-top: 2px; }
+
+/* Sits above the results it is warning about, so its margin points down. */
+.search__error--inline { margin: 0 0 var(--notes-space-2); }
 
 .search__notice {
   display: flex;
@@ -465,6 +477,13 @@
 }
 
 .palette__citation-list { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.palette__error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--notes-space-2);
+}
 
 /* --- Loading -------------------------------------------------------------- */
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Aicountly\Api\Tests\Cases;
 
+use Aicountly\Api\Auth\Identity;
 use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Support\Uuid;
 use Aicountly\Api\Tests\ApiClient;
@@ -386,6 +387,85 @@ final class CommentsTest extends TestCase
         $this->assertSame(422, $tooLong['status'], 'refused rather than silently truncated');
 
         $this->assertCount(0, $this->alice->get('/notes/' . $note['id'] . '/comments')['body']['data']);
+    }
+
+    /**
+     * Control bytes are stripped, not stored — and never crash the request.
+     *
+     * A `\u0000` is legal JSON, so it reaches the service as a real NUL. PDO
+     * hands parameters to libpq as C strings, which truncated a body at that
+     * byte — the silent loss the length cap above refuses to perform. In a
+     * `jsonb` value the same byte is refused outright, so a single mention id
+     * carrying one answered 500 instead of saving the comment.
+     */
+    public function testAControlCharacterNeitherTruncatesACommentNorCrashesTheRequest(): void
+    {
+        $note = $this->note();
+
+        $posted = $this->alice->post('/notes/' . $note['id'] . '/comments', [
+            'body' => "visible\u{0000}HIDDEN",
+            'anchor_text' => "quoted\u{0000}text",
+            'mentions' => ["contact\u{0000}1", 'contact-2'],
+        ]);
+        $this->assertSame(201, $posted['status'], 'a mention id must not reach jsonb as a control byte');
+        $this->assertSame('visibleHIDDEN', $posted['body']['data']['body'], 'nothing is cut off at the NUL');
+        $this->assertSame('quotedtext', $posted['body']['data']['anchor_text']);
+        $this->assertSame(['contact1', 'contact-2'], $posted['body']['data']['mentions']);
+
+        $stored = Connection::selectOne(
+            'SELECT body FROM note_comments WHERE id = :id',
+            ['id' => $posted['body']['data']['id']],
+        );
+        $this->assertSame('visibleHIDDEN', (string) $stored['body'], 'what was saved is what comes back');
+
+        // The edit path carries the same values into the same columns.
+        $edited = $this->alice->patch('/comments/' . $posted['body']['data']['id'], [
+            'body' => "kept\u{0000}whole",
+            'mentions' => ["contact\u{0000}3"],
+        ]);
+        $this->assertSame(200, $edited['status']);
+        $this->assertSame('keptwhole', $edited['body']['data']['body']);
+        $this->assertSame(['contact3'], $edited['body']['data']['mentions']);
+
+        // A comment that is nothing but control bytes is the empty one it is.
+        $this->assertSame(422, $this->alice->post('/notes/' . $note['id'] . '/comments', [
+            'body' => "\u{0000}\u{0001}\u{0007}",
+        ])['status']);
+
+        // Newlines are how people write a paragraph, so they survive.
+        $multiline = $this->alice->post('/notes/' . $note['id'] . '/comments', ['body' => "one\ntwo"]);
+        $this->assertSame("one\ntwo", $multiline['body']['data']['body']);
+    }
+
+    /**
+     * A comment id is not a way around the company gate.
+     *
+     * The comment routes are addressed by comment id alone, so this is the
+     * property that makes the shorter path safe: the note is resolved from the
+     * comment and checked, and a member acting in another company is refused on
+     * every one of them.
+     */
+    public function testACommentIdReachesNothingAcrossACompanyBoundary(): void
+    {
+        $inCompanyOne = new ApiClient(new Identity('user-a', 'company-1'));
+        $note = $inCompanyOne->post('/notes', [
+            'title' => 'Board pack',
+            'document' => Support::doc('for company one only'),
+        ])['body']['data'];
+        $this->share($note['id'], 'user-b', 'editor');
+        $comment = $inCompanyOne->post('/notes/' . $note['id'] . '/comments', [
+            'body' => 'The bank password is hunter2.',
+        ])['body']['data'];
+
+        $elsewhere = new ApiClient(new Identity('user-b', 'company-2'));
+        $this->assertSame(404, $elsewhere->get('/notes/' . $note['id'] . '/comments')['status']);
+        $this->assertSame(404, $elsewhere->post('/notes/' . $note['id'] . '/comments', ['body' => 'hi'])['status']);
+        $this->assertSame(404, $elsewhere->patch('/comments/' . $comment['id'], ['body' => 'hijacked'])['status']);
+        $this->assertSame(404, $elsewhere->post('/comments/' . $comment['id'] . '/resolve')['status']);
+        $this->assertSame(404, $elsewhere->delete('/comments/' . $comment['id'])['status']);
+
+        $inCompanyOneToo = new ApiClient(new Identity('user-b', 'company-1'));
+        $this->assertSame(200, $inCompanyOneToo->get('/notes/' . $note['id'] . '/comments')['status']);
     }
 
     public function testAMalformedCommentIdIsNotFoundRatherThanAServerError(): void

@@ -58,19 +58,28 @@ export function SmartFolderList({ onNavigate }: { onNavigate?: () => void }) {
         <h2 className="nav-section__title" id={headingId}>
           Smart folders
         </h2>
+        {/* aria-disabled rather than `disabled`, for the same reason the row
+            menu uses it: a disabled button leaves the tab order, so the one
+            sentence explaining why it cannot be used becomes unreachable for
+            exactly the user who most needs to hear it. */}
         <Button
           icon="plus"
           iconOnly
           size="sm"
           variant="ghost"
-          aria-label="New smart folder"
+          aria-label={
+            full ? `New smart folder — you already have ${MAX_SMART_FOLDERS}, the most you can keep` : 'New smart folder'
+          }
+          aria-disabled={full || undefined}
           title={full ? `You can keep ${MAX_SMART_FOLDERS} smart folders.` : 'New smart folder'}
-          disabled={full}
-          onClick={() => setDialog({ kind: 'create' })}
+          onClick={() => {
+            if (full) return
+            setDialog({ kind: 'create' })
+          }}
         />
       </div>
 
-      {actionError ? <ErrorNotice error={actionError} /> : null}
+      {actionError ? <ErrorNotice error={actionError} onDismiss={() => setActionError(null)} /> : null}
 
       {folders.isPending ? (
         <div className="org-skeletons" aria-hidden>

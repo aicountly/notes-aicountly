@@ -17,7 +17,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 
 import { ApiError, api } from '../../shared/api/client'
 import { queryKeys } from '../../shared/query/queryClient'
-import { Button, Dialog, EmptyState, Skeleton } from '../../shared/ui/primitives'
+import { Button, Dialog, EmptyState, LiveStatus, Skeleton } from '../../shared/ui/primitives'
 import type { PulseActionDefinition, PulseAnswer } from '../../shared/api/types'
 import './editor.css'
 
@@ -40,6 +40,24 @@ export function PulseSelectionDialog({
   onInsertBelow,
 }: PulseSelectionDialogProps) {
   const [answer, setAnswer] = useState<PulseAnswer | null>(null)
+  /**
+   * Whether the last Copy worked.
+   *
+   * `navigator.clipboard` is absent on an insecure origin and can be refused
+   * by permission, so a bare `writeText()` is a button that does nothing and
+   * says nothing. Either outcome is reported.
+   */
+  const [copied, setCopied] = useState<'yes' | 'no' | null>(null)
+
+  const copy = async (text: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error('no clipboard')
+      await navigator.clipboard.writeText(text)
+      setCopied('yes')
+    } catch {
+      setCopied('no')
+    }
+  }
 
   const catalogue = useQuery<PulseActionDefinition[], ApiError>({
     queryKey: queryKeys.pulseActions,
@@ -51,7 +69,11 @@ export function PulseSelectionDialog({
   const ask = useMutation<PulseAnswer, ApiError, string>({
     mutationFn: (action) =>
       api.post<PulseAnswer>('/pulse/selection', { note_id: noteId, action, text: selection }),
-    onSuccess: setAnswer,
+    onSuccess: (next) => {
+      setAnswer(next)
+      // A new answer is not the one that was copied a moment ago.
+      setCopied(null)
+    },
   })
 
   const actions = (catalogue.data ?? []).filter((action) => action.scope === 'selection')
@@ -122,14 +144,16 @@ export function PulseSelectionDialog({
           </p>
 
           <div className="editor-form__actions">
-            <Button
-              icon="copy"
-              onClick={() => {
-                void navigator.clipboard?.writeText(answer.answer)
-              }}
-            >
-              Copy
+            <Button icon={copied === 'yes' ? 'check' : 'copy'} onClick={() => void copy(answer.answer)}>
+              {copied === 'yes' ? 'Copied' : 'Copy'}
             </Button>
+            {copied === 'no' ? (
+              <span className="pulse-dialog__grounding" role="alert">
+                Copying is not available here — select the text instead.
+              </span>
+            ) : (
+              <LiveStatus>{copied === 'yes' ? 'Answer copied' : ''}</LiveStatus>
+            )}
             <span className="editor-form__spacer" />
             <Button onClick={() => onInsertBelow(answer.answer)}>Insert below</Button>
             <Button variant="primary" onClick={() => onReplaceSelection(answer.answer)}>

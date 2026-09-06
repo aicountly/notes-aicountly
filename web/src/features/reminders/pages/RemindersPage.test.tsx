@@ -84,6 +84,23 @@ function failure(code: string, message: string, status = 500) {
   } as unknown as Response
 }
 
+/** A 422, whose own message is generic and whose reason is in `fields`. */
+function refusal(fields: Record<string, string>) {
+  return {
+    ok: false,
+    status: 422,
+    text: async () =>
+      JSON.stringify({
+        success: false,
+        error: {
+          code: 'VALIDATION_FAILED',
+          message: 'Some fields need attention.',
+          details: { fields },
+        },
+      }),
+  } as unknown as Response
+}
+
 function renderPage() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -259,6 +276,94 @@ describe('RemindersPage', () => {
     renderPage()
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/offline/i)
+  })
+
+  it('says out loud that a reminder was deleted, because the row it was on is gone', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Chase invoice' })
+
+    fetchMock.mockImplementation(async (input: unknown) => {
+      if (String(input).includes('/reminders/rem-overdue')) return envelope(null, 204)
+      return envelope(fourReminders().filter((row) => row.id !== 'rem-overdue'))
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Delete the reminder for Chase invoice' }))
+
+    expect(await screen.findByText('Deleted the reminder for Chase invoice.')).toBeInTheDocument()
+  })
+
+  it('says why the server refused, not just that some fields need attention', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: 'Snooze the reminder for Chase invoice' }))
+    const popup = screen.getByRole('dialog', { name: 'Snooze the reminder for Chase invoice' })
+
+    // The sentence a person can act on lives in `details.fields`; the 422's own
+    // message is boilerplate.
+    fetchMock.mockImplementation(async (input: unknown) =>
+      String(input).includes('/snooze')
+        ? refusal({ minutes: 'Snooze by 1 to 43200 minutes.' })
+        : envelope(fourReminders()),
+    )
+
+    await user.click(within(popup).getByRole('button', { name: '15 minutes' }))
+
+    expect(await screen.findByText('Snooze by 1 to 43200 minutes.')).toBeInTheDocument()
+  })
+
+  it('puts focus back on the snooze button after a choice is made', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    const trigger = await screen.findByRole('button', { name: 'Snooze the reminder for Chase invoice' })
+    await user.click(trigger)
+
+    fetchMock.mockImplementation(async (input: unknown) =>
+      String(input).includes('/snooze')
+        ? envelope(makeReminder({ id: 'rem-overdue', status: 'snoozed' }))
+        : envelope(fourReminders()),
+    )
+    await user.click(screen.getByRole('button', { name: '1 hour' }))
+
+    // The popup and the button inside it are gone; without this the keyboard
+    // user is back at the top of the document.
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('leaves the other reminders usable while one of them is saving', async () => {
+    const user = userEvent.setup()
+    renderPage()
+
+    await screen.findByRole('link', { name: 'Chase invoice' })
+
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    fetchMock.mockImplementation(async (input: unknown) => {
+      if (String(input).includes('/complete')) {
+        await held
+        return envelope(makeReminder({ id: 'rem-overdue', status: 'completed' }))
+      }
+      return envelope(fourReminders())
+    })
+
+    await user.click(screen.getByRole('button', { name: /Complete the reminder for Chase invoice/ }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Complete the reminder for Chase invoice/ })).toBeDisabled(),
+    )
+    // A different reminder is nothing to do with the one in flight.
+    expect(screen.getByRole('button', { name: 'Delete the reminder for Call the auditor' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /Complete the reminder for Call the auditor/ })).toBeEnabled()
+
+    release()
+    // On the row, and in the live region beside it.
+    await waitFor(() => expect(screen.getAllByText('Done.')).not.toHaveLength(0))
   })
 
   it('narrows to what is still to do when asked', async () => {

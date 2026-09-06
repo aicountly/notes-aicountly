@@ -87,7 +87,39 @@ marker rather than HTML, and the client parses the marker into `<mark>` elements
 - Size is enforced server-side against `NOTES_MAX_ATTACHMENT_SIZE`.
 - Downloads go through an endpoint that re-checks note permission every time and
   serves with `Content-Disposition: attachment` and `X-Content-Type-Options:
-  nosniff`. Uploaded HTML is never rendered as trusted content.
+  nosniff`. Uploaded HTML is never rendered as trusted content. For a
+  Drive-stored file the same check runs and the endpoint then redirects to a
+  short-lived presigned URL that Drive issued after its **own** permission check
+  — authorised twice, and no bytes through this process.
+- Notes never holds object-storage credentials. Drive's backend is the only
+  credentialed service in the suite, and this API reaches object storage only
+  through URLs Drive signs for one object at a time.
+
+### A presigned URL never carries a session key
+
+The rule, because getting it wrong is quiet and expensive: **an AICOUNTLY session
+key is sent to AICOUNTLY origins only.** A presigned upload or download URL points
+at the object-storage provider, not at `*.aicountly.com`, and its authority is
+already in the URL's signature. A `ses_key` on that request would add nothing and
+would hand a live session to a third-party object store, to every proxy in
+between, and to their access logs — where URLs are routinely written down.
+
+This is enforced structurally rather than by care. `AicountlyClient::putBytes()`
+and `fetchBytes()` are separate methods from `send()`, not a flag on it: they
+accept no `ses_key`, build no `Authorization` header, and there is no argument
+anyone can pass that turns the header back on. `DriveUploadTest` asserts the
+absence. Two supporting rules make it hold:
+
+- **The URL is data, not configuration.** It arrives inside another product's
+  JSON response, so it is validated to be `http(s)` before anything is sent to
+  it; `file://` or a bare path would turn a confused or compromised sibling into
+  a way to make this server read its own disk.
+- **Redirects are never followed** on any sibling call, because a redirect would
+  carry the session key to whatever host it names.
+
+The same rule is why a presigned GET is handed to the browser rather than fetched
+with credentials attached. See
+[DRIVE_INTEGRATION.md](DRIVE_INTEGRATION.md#drive-never-receives-the-bytes).
 
 ## SQL
 

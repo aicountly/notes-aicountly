@@ -130,15 +130,27 @@ about where Notes' inline AI actually runs.
 ## Context parameters
 
 Pulse carries company context as **`cmp_id` / `fy_id` / `bo_id` query
-parameters**, resolved through `GET /api/context/resolve`.
+parameters**, resolved through `GET /api/context/resolve` and read on every
+inbound call by `BaseController::companyContext()`.
 
 Notes derives its tenant from the `validatesession` response instead
-(`SessionGuard::identityFromPortal`). Both are defensible, but they are not the
-same thing, and a Notes↔Pulse call must pass `cmp_id` explicitly rather than
-assume the session implies it. This is the detail most likely to produce a
-"works for me, empty for them" bug once the two are wired.
+(`SessionGuard::identityFromPortal`), and that tenant is a company **UUID**, not
+the numeric `cmp_id` the older products key on. The two are not interchangeable,
+so Notes cannot manufacture a `cmp_id` from what it knows.
 
-## Sibling API origins — an ecosystem convention Notes should adopt
+What Notes does instead: `Http\CompanyContext` records `cmp_id` / `fy_id` /
+`bo_id` from the inbound request, and `AicountlyClient` puts them on every
+outbound sibling call. Nothing is invented — when the caller sent none, none are
+forwarded — and nothing here is an authorisation input: Notes' own scoping stays
+on `tenant_id`, and a query parameter never decides who may read a note.
+
+That leaves one open item, and it is on the Notes frontend rather than here: the
+SPA does not yet carry a company selector, so it sends no `cmp_id`. Until it
+does, a company-scoped sibling call from Notes will be answered for the
+sibling's own default. This is the detail most likely to produce a "works for
+me, empty for them" bug.
+
+## Sibling API origins — the ecosystem convention, now implemented
 
 Pulse does not require a URL per sibling product. `App\Services\ProductApiResolver`
 derives one:
@@ -147,22 +159,33 @@ derives one:
 2. otherwise from the request host — a sandbox host gives
    `{product}.gh.aicountly.com`, anything else `{product}.aicountly.com`.
 
-Its sandbox test is character-for-character the one Notes already ships in
-`web/src/auth/hostnames.ts` (`^[a-z0-9-]+\.gh\.aicountly\.com$` and
-`^gh-[a-z0-9-]+\.aicountly\.com$`), which came from books-react-app. The
-convention is settled; Notes just implements half of it.
+`Integrations\SiblingApi` is Notes' side of that, and follows it name for name:
+`{PRODUCT}_API_ORIGIN` first, then the request host. `SiblingApi::apiBase()`
+appends the `/api` prefix every product mounts under, exactly as Pulse's proxy
+builds `{origin}/api/{path}`.
 
-Notes currently makes `DRIVE_API_URL`, `CALENDAR_API_URL`, `CONTACTS_API_URL`
-and `CONNECT_API_URL` **required** before their flags can switch on
-(`Features::REQUIRES_ENV`). That was the right instinct — a flag on with nothing
-behind it produces controls that fail on click — but it is stricter than the
-ecosystem needs, and it makes every deployment carry four URLs that are already
-implied by its own hostname.
+Two deliberate differences:
 
-The change: keep the flag as the explicit gate, make the URL optional, and derive
-the origin from the host when it is unset. `NOTES_DRIVE_ENABLED=true` alone then
-works in both environments, exactly as it does for every other product, while
-turning something on still remains a deliberate act.
+- **An unrecognised host resolves to sandbox, not production.** Pulse's copy
+  answers "is this a sandbox build", where guessing wrong costs a redirect.
+  Notes' copy decides which company's live data a server-to-server call reaches,
+  so it fails towards the empty environment.
+- **A product code is not a hostname.** Drive answers on `drive.aicountly.com`
+  but its `product_code` is `docs`; Connect is `connect.` / `chat`; Pulse is
+  `pulse.` / `buddy` (and `buddy.gh.aicountly.com` in sandbox, because the
+  rename was production-only). `SiblingApi` holds both columns and derives
+  neither from the other — spelling a code into a host gives
+  `https://docs.aicountly.com`, which resolves nowhere.
+
+The older `{PRODUCT}_API_URL` names are still read, so a deployed `.env` keeps
+working across the upgrade. They named a full API base *including* `/api`, so
+they are used verbatim rather than having the prefix appended. `PULSE_API_URL`
+is excluded from that fallback on purpose: in this repository it names the model
+gateway `HttpPulseProvider` posts completions to, not the Pulse product's API.
+
+Flags remain the gate — `Features::REQUIRES_ENV` lists only AI — so
+`NOTES_DRIVE_ENABLED=true` alone works in both environments, and turning
+something on is still a deliberate act.
 
 ## What to do next
 

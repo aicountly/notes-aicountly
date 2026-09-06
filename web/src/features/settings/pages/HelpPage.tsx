@@ -28,6 +28,10 @@ import '../settings.css'
  * on every engine this app runs in; the user-agent string is the fallback. The
  * cost of guessing wrong is one wrong glyph, so neither is worth a feature
  * detection dance.
+ *
+ * Read while rendering rather than when the module loads: this page is a lazy
+ * chunk, and a value fixed at import time is one more thing that depends on
+ * *when* the chunk happened to arrive.
  */
 function isMac(): boolean {
   const platform = navigator.platform ?? ''
@@ -36,9 +40,6 @@ function isMac(): boolean {
   return /mac/i.test(navigator.userAgent ?? '')
 }
 
-const MOD = isMac() ? '⌘' : 'Ctrl'
-const SHIFT = isMac() ? '⇧' : 'Shift'
-
 interface Shortcut {
   keys: string[]
   what: string
@@ -46,18 +47,26 @@ interface Shortcut {
   note?: string
 }
 
-/** Exactly what `useKeyboardShortcuts` binds — nothing aspirational. */
-const GLOBAL_SHORTCUTS: Shortcut[] = [
-  { keys: [MOD, 'K'], what: 'Open the command palette' },
-  { keys: [MOD, SHIFT, 'F'], what: 'Open search' },
-  { keys: [MOD, 'N'], what: 'Start a new note' },
-  { keys: [MOD, '/'], what: 'Open this page' },
-  {
-    keys: ['/'],
-    what: 'Open search',
-    note: 'Only when you are not typing in a note or a field — otherwise it types a slash.',
-  },
-]
+/**
+ * Exactly what `shared/hooks/useKeyboardShortcuts` binds — nothing aspirational.
+ *
+ * If a binding is added there and not here, this page is wrong; that is the
+ * cost of documenting behaviour that lives in another file, and it is cheaper
+ * than the alternative of a help page nobody trusts.
+ */
+function globalShortcuts(mod: string, shift: string): Shortcut[] {
+  return [
+    { keys: [mod, 'K'], what: 'Open the command palette' },
+    { keys: [mod, shift, 'F'], what: 'Open search' },
+    { keys: [mod, 'N'], what: 'Start a new note' },
+    { keys: [mod, '/'], what: 'Open this page' },
+    {
+      keys: ['/'],
+      what: 'Open search',
+      note: 'Only when you are not typing in a note or a field — otherwise it types a slash.',
+    },
+  ]
+}
 
 /** Behaviour of the dialog and menu primitives, which every screen inherits. */
 const DIALOG_SHORTCUTS: Shortcut[] = [
@@ -69,6 +78,9 @@ const DIALOG_SHORTCUTS: Shortcut[] = [
 
 export default function HelpPage() {
   const pulseEnabled = useFeature('ai')
+
+  const mac = isMac()
+  const globals = globalShortcuts(mac ? '⌘' : 'Ctrl', mac ? '⇧' : 'Shift')
 
   return (
     <div className="set-page">
@@ -87,12 +99,12 @@ export default function HelpPage() {
               Keyboard
             </h2>
             <p className="set-section__description">
-              Shown for {isMac() ? 'a Mac keyboard' : 'a PC keyboard'}, which is what this device reports.
+              Shown for {mac ? 'a Mac keyboard' : 'a PC keyboard'}, which is what this device reports.
             </p>
           </div>
 
           <div className="set-section__body">
-            <ShortcutTable caption="Anywhere in the app" rows={GLOBAL_SHORTCUTS} />
+            <ShortcutTable caption="Anywhere in the app" rows={globals} />
             <ShortcutTable caption="In a dialog or a menu" rows={DIALOG_SHORTCUTS} />
 
             <p className="set-hint">
@@ -107,7 +119,7 @@ export default function HelpPage() {
             <h2 className="set-section__title" id="help-how">
               How Notes works
             </h2>
-            <p className="set-section__description">The five things that are worth knowing before you start.</p>
+            <p className="set-section__description">The handful of things worth knowing before you start.</p>
           </div>
 
           <div className="set-section__body">
@@ -156,10 +168,10 @@ export default function HelpPage() {
               </p>
               <p>
                 Changes made offline are queued and sent when you reconnect — the header shows how many are
-                waiting. If someone else changed the same note while you were away, the change is{' '}
-                <strong>not merged silently</strong>: it is held, and you are shown both versions to choose
-                between. Deleting a note for good is the one thing that never happens offline, because it cannot
-                be taken back.
+                waiting. If someone else changed the same note while you were away, nothing is{' '}
+                <strong>merged silently</strong>: a banner asks which copy to keep, and keeping yours saves it
+                as a new note rather than overwriting theirs, so neither version is thrown away. Deleting a note
+                for good is the one thing that never happens offline, because it cannot be taken back.
               </p>
               <p>
                 What is stored on this device, and a way to clear it, is on the <Link to="/settings">Settings</Link>{' '}
@@ -193,6 +205,19 @@ export default function HelpPage() {
               <p className="set-hint">
                 Reminders are personal: two people sharing a note each set their own, and neither can see the
                 other’s.
+              </p>
+            </Explainer>
+
+            <Explainer icon="history" title="Earlier versions of a note">
+              <p>
+                Notes keeps earlier versions of a note as you edit it. Open the note, then{' '}
+                <strong>Show note info</strong> in the header: the panel lists the versions with when each was
+                saved, alongside the note’s links, its backlinks and what has happened to it.
+              </p>
+              <p>
+                Versions are written as you write, so there is nothing to remember to do. A note in the trash
+                keeps its history; deleting one for good takes the history with it, along with its attachments
+                and comments.
               </p>
             </Explainer>
 

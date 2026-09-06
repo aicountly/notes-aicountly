@@ -36,6 +36,14 @@ export type ImageUploader = (file: File) => Promise<UploadedImage>
 export interface PasteHandlingOptions {
   uploadImage: (() => ImageUploader | null) | null
   onError: (message: string) => void
+  /**
+   * Called around an upload started by a paste.
+   *
+   * Without it the paste is silent: the handler consumes the event, the file
+   * goes up over however many seconds a phone connection takes, and nothing on
+   * screen says anything is happening.
+   */
+  onUploading: (uploading: boolean) => void
 }
 
 const ABSOLUTE_URL = /^(https?:\/\/|mailto:|tel:)[^\s<>"]+$/i
@@ -74,7 +82,7 @@ export const PasteHandling = Extension.create<PasteHandlingOptions>({
   name: 'pasteHandling',
 
   addOptions() {
-    return { uploadImage: null, onError: () => undefined }
+    return { uploadImage: null, onError: () => undefined, onUploading: () => undefined }
   },
 
   addProseMirrorPlugins() {
@@ -99,6 +107,7 @@ export const PasteHandling = Extension.create<PasteHandlingOptions>({
               // a base64 src the server will strip on the next save.
               if (!upload) return false
 
+              this.options.onUploading(true)
               void upload(image)
                 .then((uploaded) => {
                   editor
@@ -121,6 +130,7 @@ export const PasteHandling = Extension.create<PasteHandlingOptions>({
                     error instanceof Error ? error.message : 'That image could not be added.',
                   )
                 })
+                .finally(() => this.options.onUploading(false))
 
               return true
             }

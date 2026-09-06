@@ -48,13 +48,23 @@ export interface NotebookCapabilities {
   edit: boolean
   add_notes: boolean
   move: boolean
+  /**
+   * Archiving and reordering are listed apart from `edit` because the server
+   * lists them apart: archiving hides the branch from everyone it is shared
+   * with, and reordering renumbers siblings the caller may not be able to see.
+   * Both are owner-only. A UI that gated them on `edit` would offer an editor
+   * two controls that answer 403.
+   */
+  archive: boolean
+  reorder: boolean
   delete: boolean
   manage_members: boolean
 }
 
 /** A tree node, with the fields the presenter sends beyond {@link Notebook}. */
 export interface NotebookNode extends Notebook {
-  capabilities?: NotebookCapabilities
+  /** Partial on purpose: a deployment older than a capability simply omits it. */
+  capabilities?: Partial<NotebookCapabilities>
   /** This notebook's notes plus every descendant's. */
   total_note_count?: number
   owner_user_id?: string
@@ -68,19 +78,25 @@ const ROLE_RANK: Record<NoteRole, number> = { viewer: 1, commenter: 2, editor: 3
  * to `role` when an older server omits it.
  */
 export function notebookCapabilities(notebook: NotebookNode): NotebookCapabilities {
-  if (notebook.capabilities) return notebook.capabilities
-
   const rank = ROLE_RANK[notebook.role] ?? 0
   const owner = notebook.role === 'owner'
 
-  return {
+  const fromRole: NotebookCapabilities = {
     view: true,
     edit: rank >= ROLE_RANK.editor,
     add_notes: rank >= ROLE_RANK.editor,
     move: owner,
+    archive: owner,
+    reorder: owner,
     delete: owner,
     manage_members: owner,
   }
+
+  // The server's answer wins for every key it sends, and the role-derived rules
+  // fill the rest. Merging rather than choosing matters: a server that predates
+  // one of these keys would otherwise hand back `undefined` for it, and a
+  // control gated on that key would be dead for the owner who may use it.
+  return { ...fromRole, ...notebook.capabilities }
 }
 
 // ---------------------------------------------------------------------------

@@ -72,9 +72,18 @@ final class LocalObjectStore implements ObjectStore
         return gmdate('Y/m') . '/' . bin2hex(random_bytes(16));
     }
 
-    public function put(string $key, string $bytes, string $mimeType): void
+    /**
+     * Write the bytes and hand back the key they went to — the same key, always.
+     *
+     * The disk has no catalogue, so `$filename` is ignored here on purpose: a
+     * name taken from a user must never reach a path. {@see DriveObjectStore} is
+     * the implementation for which the return value differs from the argument.
+     */
+    public function put(string $key, string $bytes, string $mimeType, string $filename = ''): string
     {
-        unset($mimeType); // The disk stores bytes; the type is the database's column.
+        // The disk stores bytes; the type is the database's column, and the
+        // name is the database's column too.
+        unset($mimeType, $filename);
 
         $path = $this->pathFor($key);
         $this->ensureDirectory(dirname($path));
@@ -93,6 +102,8 @@ final class LocalObjectStore implements ObjectStore
             Logger::error('storage.rename_failed', ['store' => 'local']);
             throw new ApiException(500, 'STORAGE_WRITE_FAILED', 'The file could not be saved.');
         }
+
+        return $key;
     }
 
     public function get(string $key): string

@@ -27,6 +27,7 @@ import { useFeature } from '../../../app/AppConfigProvider'
 import { ErrorNotice } from '../../organise/ErrorNotice'
 import { RowMenu } from '../../organise/RowMenu'
 import { iconOrDefault } from '../../organise/appearance'
+import { useDefaultNotebook } from '../../settings/preferences'
 import type { NoteTemplate } from '../../../shared/api/types'
 import { CANVAS_OFF, TemplateDialog } from '../components/TemplateDialog'
 import { TemplatePicker } from '../components/TemplatePicker'
@@ -48,6 +49,9 @@ export default function TemplatesPage() {
   const start = useCreateNoteFromTemplate()
   const remove = useDeleteTemplate()
   const canvasEnabled = useFeature('canvas')
+  // The same notebook the picker files a templated note into. Two ways to press
+  // the same button must not put the note in two different places.
+  const [defaultNotebook] = useDefaultNotebook()
 
   const [picking, setPicking] = useState(false)
   const [editing, setEditing] = useState<NoteTemplate | null>(null)
@@ -65,13 +69,14 @@ export default function TemplatesPage() {
 
     setStartingId(template.id)
     start
-      .mutateAsync({ templateId: template.id })
+      .mutateAsync({ templateId: template.id, notebook_id: defaultNotebook })
       .then((note) => {
         setPreviewing(null)
         navigate(`/notes/${note.id}`)
       })
-      // The message is rendered at the top of the page; the note was never
-      // created, so there is nowhere to go.
+      // The message is rendered wherever the press came from — the preview
+      // dialog if one is open, the page if not. The note was never created, so
+      // there is nowhere to go.
       .catch(() => undefined)
       .finally(() => setStartingId(null))
   }
@@ -100,7 +105,9 @@ export default function TemplatesPage() {
           </div>
         </header>
 
-        {start.error ? <ErrorNotice error={start.error} /> : null}
+        {/* Behind an open preview the page is unreachable, so the failure is
+            shown inside that dialog instead of underneath it. */}
+        {start.error && previewing === null ? <ErrorNotice error={start.error} /> : null}
 
         {templates.isError ? (
           <ErrorNotice error={templates.error} onRetry={() => void templates.refetch()} />
@@ -164,6 +171,7 @@ export default function TemplatesPage() {
           template={previewing}
           starting={startingId === previewing.id}
           blockedReason={blockedReason(previewing)}
+          error={start.error}
           onClose={() => setPreviewing(null)}
           onUse={startNote}
         />

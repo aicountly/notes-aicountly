@@ -188,6 +188,25 @@ final class SearchTest extends TestCase
         $this->assertFalse($result['body']['meta']['has_more']);
     }
 
+    public function testAQueryThatIsNotValidUtf8IsAnsweredRatherThanCrashing(): void
+    {
+        $note = $this->note($this->alice, 'GST return', 'The gst refund is due next week.');
+
+        // A URL carries bytes, not text: `?q=gst%C3%28refund` decodes to a lead
+        // byte with no continuation. Postgres refuses such bytes outright
+        // ("invalid byte sequence for encoding UTF8"), so binding one turned a
+        // mistyped URL into a 500 out of the search box — on every surface that
+        // takes a query, including the one that feeds Pulse.
+        $broken = "gst \xC3\x28 refund";
+
+        $result = $this->search($this->alice, $broken);
+        $this->assertSame(200, $result['status']);
+        $this->assertSame([$note['id']], $this->ids($result), 'the readable part of the query still searches');
+
+        $this->assertSame(200, $this->alice->get('/search/suggest', ['q' => $broken])['status']);
+        $this->assertCount(1, (new NotesSearchService())->retrieveForAi(Support::user('a'), $broken, 5));
+    }
+
     public function testResultsPaginate(): void
     {
         foreach (['first', 'second', 'third'] as $which) {
@@ -337,11 +356,19 @@ final class SearchTest extends TestCase
 
     public function testAWildcardTypedIntoSuggestMatchesNothing(): void
     {
-        $this->note($this->alice, 'GST return', 'nothing');
+        $this->note($this->alice, 'GST return', 'nothing', ['tags' => ['gst']]);
+        $this->notebook('GST 2026');
 
         // `%` is a LIKE wildcard; unescaped it would turn a prefix lookup into
         // "everything you have".
-        $this->assertCount(0, $this->alice->get('/search/suggest', ['q' => '%'])['body']['data']['notes']);
+        $data = $this->alice->get('/search/suggest', ['q' => '%'])['body']['data'];
+        $this->assertCount(0, $data['notes']);
+        $this->assertCount(0, $data['notebooks']);
+        // Tags are matched on the *slug* of what was typed, and slugging drops
+        // punctuation — so `%` used to arrive as an empty prefix, which LIKE
+        // reads as "match everything".
+        $this->assertCount(0, $data['tags'], 'a query with nothing to match on suggests nothing');
+        $this->assertCount(0, $this->alice->get('/search/suggest', ['q' => '!!!'])['body']['data']['tags']);
     }
 
     // -- Somebody else's notes ----------------------------------------------
@@ -465,6 +492,53 @@ final class SearchTest extends TestCase
         $this->assertContainsString('smaller office', $chunks[0]['snippet']);
     }
 
+    public function testRetrievalScopedToOneNoteReadsItEvenWhenArchived(): void
+    {
+        $note = $this->note($this->alice, 'Board meeting', 'We settled on the smaller office and signed nothing yet.');
+        $this->alice->post('/notes/' . $note['id'] . '/archive');
+
+        // Archiving is how a note leaves the *list*. A question asked of one
+        // note by name is not a corpus search: the caller named it, opened it
+        // and may read it, so answering "I found nothing" about the note on
+        // screen is a bug, not a filter.
+        $chunks = (new NotesSearchService())->retrieveForAi(Support::user('a'), 'what did we decide', 5, [
+            'note_id' => $note['id'],
+        ]);
+
+        $this->assertCount(1, $chunks);
+        $this->assertContainsString('smaller office', $chunks[0]['snippet']);
+    }
+
+    public function testAMalformedRetrievalScopeIsRejectedBeforeItReachesPostgres(): void
+    {
+        $this->note($this->alice, 'GST return', 'The gst refund is due next week.');
+        $search = new NotesSearchService();
+
+        // `note_id` was checked; `notebook_id` was not, and reached a uuid
+        // column as text — an uncaught PDOException, which is a 500 with a
+        // stack trace in the log rather than an answer.
+        $this->assertApiError('BAD_REQUEST', fn () => $search->retrieveForAi(
+            Support::user('a'),
+            'gst',
+            5,
+            ['notebook_id' => 'not-a-uuid'],
+        ));
+        $this->assertApiError('BAD_REQUEST', fn () => $search->retrieveForAi(
+            Support::user('a'),
+            'gst',
+            5,
+            ['note_id' => 'not-a-uuid'],
+        ));
+        // A scope that is not even a string is the same answer, not an
+        // "Array to string conversion" warning followed by the same crash.
+        $this->assertApiError('BAD_REQUEST', fn () => $search->retrieveForAi(
+            Support::user('a'),
+            'gst',
+            5,
+            ['notebook_id' => ['not-a-uuid']],
+        ));
+    }
+
     public function testRetrievalCanBeScopedToOneNotebook(): void
     {
         $clients = $this->notebook('Clients');
@@ -521,6 +595,13 @@ final class SearchTest extends TestCase
         $this->assertSame(200, $result['status']);
         $this->assertSame('keyword_fallback', $result['body']['meta']['mode'], 'the engine that answered is named');
         $this->assertSame([$note['id']], $this->ids($result));
+        // Falling back to keyword search means the snippets come back
+        // highlighted, so this response has to carry the markers too — a client
+        // that split only the `/search/notes` response would render `[[hl]]`.
+        $this->assertSame(
+            ['open' => SearchSnippet::HIGHLIGHT_OPEN, 'close' => SearchSnippet::HIGHLIGHT_CLOSE],
+            $result['body']['meta']['highlight'] ?? null,
+        );
     }
 
     public function testSemanticSearchNeedsSomethingToSearchFor(): void

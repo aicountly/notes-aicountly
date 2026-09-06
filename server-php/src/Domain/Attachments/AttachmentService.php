@@ -12,6 +12,8 @@ use Aicountly\Api\Domain\Jobs\JobQueue;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Integrations\DriveAttachmentService;
+use Aicountly\Api\Integrations\DriveContext;
+use Aicountly\Api\Integrations\DriveDocumentService;
 use Aicountly\Api\Integrations\ObjectStore;
 use Aicountly\Api\Support\Logger;
 use Aicountly\Api\Support\Str;
@@ -218,17 +220,35 @@ final class AttachmentService
      * stop answering for its attachments too, and a URL that once worked is not
      * a grant.
      *
+     * `$sesKey` is the caller's own session, and it is what lets a Drive-stored
+     * attachment answer with a presigned URL: Drive re-checks the caller before
+     * issuing one, so the file is authorised twice — here against the note, and
+     * there against the document — rather than served on this API's say-so.
+     *
      * @return array{attachment: array<string, mixed>, store: ObjectStore}
      */
-    public function openForDownload(Identity $identity, string $noteId, string $attachmentId): array
-    {
-        $this->permissions->requireNote($identity, $noteId, NotePermissionService::VIEW, columns: 'n.id');
+    public function openForDownload(
+        Identity $identity,
+        string $noteId,
+        string $attachmentId,
+        string $sesKey = '',
+    ): array {
+        $note = $this->permissions->requireNote(
+            $identity,
+            $noteId,
+            NotePermissionService::VIEW,
+            columns: 'n.id, n.tenant_id',
+        );
 
         $attachment = $this->requireAttachment($noteId, $attachmentId);
+        $provider = (string) $attachment['storage_provider'];
 
         return [
             'attachment' => $attachment,
-            'store' => DriveAttachmentService::storeFor((string) $attachment['storage_provider']),
+            'store' => DriveAttachmentService::storeFor(
+                $provider,
+                $provider === 'drive' ? $this->driveContext($sesKey, $note) : null,
+            ),
         ];
     }
 
@@ -239,12 +259,24 @@ final class AttachmentService
     /**
      * Store bytes against a note and queue whatever can be derived from them.
      *
+     * `$sesKey` is the caller's own session. It is unused by the local store and
+     * required by Drive: Notes runs Drive's upload sequence as the person who
+     * asked, never as itself (see {@see DriveContext}).
+     *
      * @param array{filename?: string, bytes: string, content_type?: string, block_id?: ?string, id?: ?string} $upload
      * @return array<string, mixed>
      */
-    public function upload(Identity $identity, string $noteId, array $upload): array
+    public function upload(Identity $identity, string $noteId, array $upload, string $sesKey = ''): array
     {
-        $this->permissions->requireNote($identity, $noteId, NotePermissionService::EDIT, columns: 'n.id');
+        // tenant_id and note_type come back because Drive files by scope and by
+        // module: a personal note's file goes under the user, a company note's
+        // under the company, and a meeting recording is not a stray attachment.
+        $note = $this->permissions->requireNote(
+            $identity,
+            $noteId,
+            NotePermissionService::EDIT,
+            columns: 'n.id, n.tenant_id, n.note_type',
+        );
 
         $attachmentId = isset($upload['id']) && Uuid::isValid($upload['id'])
             ? strtolower((string) $upload['id'])
@@ -268,20 +300,64 @@ final class AttachmentService
                 throw ApiException::validation(['id' => 'That attachment id is already in use.']);
             }
 
-            return self::present($existing);
+            // A row left by an upload that never landed is not a create to
+            // replay — there are no bytes behind it. It is cleared so this
+            // attempt can be the one that works, which is what the client
+            // retrying with the same id is asking for.
+            if ((string) $existing['upload_status'] === 'failed') {
+                Connection::execute(
+                    'DELETE FROM note_attachments WHERE id = :id AND upload_status = \'failed\'',
+                    ['id' => $attachmentId],
+                );
+            } else {
+                return self::present($existing);
+            }
         }
 
         $bytes = (string) $upload['bytes'];
         $filename = self::sanitiseFilename((string) ($upload['filename'] ?? ''));
         $inspected = $this->inspect($bytes, $filename, (string) ($upload['content_type'] ?? ''));
 
-        $store = DriveAttachmentService::defaultStore();
+        $store = DriveAttachmentService::defaultStore($this->driveContext(
+            $sesKey,
+            $note,
+            DriveContext::moduleFor((string) ($note['note_type'] ?? 'document'), $inspected['kind']),
+        ));
+
+        // Bytes first: the row that appears on the note is only ever written
+        // once there is an object behind it, because a note showing a file that
+        // cannot be opened is worse than an object nothing points at. The row
+        // the failure path writes below is the opposite of that — it says
+        // plainly that nothing was stored.
+        //
+        // The key comes back from the write rather than going into it. The local
+        // store hands back what it was given; Drive builds its own object key
+        // and only names the document once the bytes have been scanned and
+        // promoted, so there is nothing to record until then.
         $key = $store->allocateKey();
 
-        // Bytes first: a row pointing at an object that was never written is
-        // worse than an object nothing points at, because the note shows a file
-        // that cannot be opened.
-        $store->put($key, $bytes, $inspected['mime_type']);
+        try {
+            $key = $store->put($key, $bytes, $inspected['mime_type'], $filename);
+        } catch (\Throwable $e) {
+            // Nothing landed. The store has already cleaned up after itself —
+            // Drive aborts its upload session, which deletes the quarantine
+            // object — and what is left is the note's own record of an attempt
+            // that failed, so a client polling this id learns that rather than
+            // waiting for a file that is never coming.
+            $this->recordFailedAttempt($identity, [
+                'id' => $attachmentId,
+                'note_id' => $noteId,
+                'block_id' => self::blockId($upload['block_id'] ?? null),
+                'storage_provider' => $store->name(),
+                'filename' => $filename,
+                'mime_type' => $inspected['mime_type'],
+                'byte_size' => strlen($bytes),
+                'checksum' => hash('sha256', $bytes),
+                'kind' => $inspected['kind'],
+            ]);
+
+            throw $e;
+        }
 
         try {
             $row = $this->insert($identity, [
@@ -294,6 +370,8 @@ final class AttachmentService
                 'filename' => $filename,
                 'mime_type' => $inspected['mime_type'],
                 'byte_size' => strlen($bytes),
+                // The same digest Drive was asked to verify the upload against,
+                // recorded here as what this API saw arrive.
                 'checksum' => hash('sha256', $bytes),
                 'kind' => $inspected['kind'],
                 'metadata' => ['source' => 'upload'],
@@ -320,17 +398,36 @@ final class AttachmentService
      *
      * @return array<string, mixed>
      */
-    public function linkDrive(Identity $identity, string $noteId, string $driveFileId, ?string $blockId): array
-    {
-        $this->permissions->requireNote($identity, $noteId, NotePermissionService::EDIT, columns: 'n.id');
+    public function linkDrive(
+        Identity $identity,
+        string $sesKey,
+        string $noteId,
+        string $driveFileId,
+        ?string $blockId,
+    ): array {
+        $note = $this->permissions->requireNote(
+            $identity,
+            $noteId,
+            NotePermissionService::EDIT,
+            columns: 'n.id, n.tenant_id',
+        );
 
         if ($driveFileId === '' || strlen($driveFileId) > 128) {
             throw ApiException::validation(['drive_file_id' => 'A Drive file id is required.']);
         }
 
-        // Drive answers whether this caller may see the file. This API never
-        // decides that, and never treats an id as proof of access.
-        $file = (new DriveAttachmentService())->file($identity, $driveFileId);
+        // Checked before the context is built, so a deployment without Drive
+        // answers FEATURE_DISABLED rather than a complaint about company
+        // parameters it would never have used.
+        Features::require(Features::DRIVE);
+
+        // Drive answers whether this caller may see the file, on the caller's
+        // own session. This API never decides that, and never treats an id as
+        // proof of access.
+        $file = (new DriveAttachmentService())->file(
+            DriveContext::forNote($sesKey, $noteId, self::tenantOf($note)),
+            $driveFileId,
+        );
 
         $mime = $file['mime_type'];
         if (in_array($mime, self::BLOCKED_TYPES, true)) {
@@ -387,9 +484,19 @@ final class AttachmentService
      * with **no** attachment_id: the job's whole purpose is to outlive the row,
      * and a foreign key to the row it is cleaning up would cascade it away.
      */
-    public function delete(Identity $identity, string $noteId, string $attachmentId): void
+    /**
+     * @param string $sesKey The caller's own session, forwarded to Drive so the
+     *        cross-reference is dropped as them. Optional: without it the
+     *        detach still succeeds and only the Drive link row is left behind.
+     */
+    public function delete(Identity $identity, string $noteId, string $attachmentId, string $sesKey = ''): void
     {
-        $this->permissions->requireNote($identity, $noteId, NotePermissionService::EDIT, columns: 'n.id');
+        $note = $this->permissions->requireNote(
+            $identity,
+            $noteId,
+            NotePermissionService::EDIT,
+            columns: 'n.id, n.tenant_id',
+        );
 
         $attachment = $this->requireAttachment($noteId, $attachmentId);
 
@@ -400,17 +507,32 @@ final class AttachmentService
                 ['id' => $attachmentId],
             );
 
+            $keys = array_values(array_filter([
+                (string) $attachment['storage_key'],
+                $attachment['thumbnail_key'] === null ? null : (string) $attachment['thumbnail_key'],
+            ]));
+
             // A linked Drive file belongs to the user, not to this note. Notes
             // deleting it would destroy a file they still have in Drive.
-            if ($attachment['drive_file_id'] === null) {
+            //
+            // A row that names no object gets no job either: an upload that
+            // failed, or one whose object a previous purge already removed, has
+            // nothing left to clean up, and a job with no keys can only fail.
+            if ($attachment['drive_file_id'] === null && $keys !== []) {
                 $this->jobs->enqueue($identity, JobQueue::OBJECT_PURGE, null, null, [
                     'storage_provider' => (string) $attachment['storage_provider'],
-                    'keys' => array_values(array_filter([
-                        (string) $attachment['storage_key'],
-                        $attachment['thumbnail_key'] === null ? null : (string) $attachment['thumbnail_key'],
-                    ])),
+                    'keys' => $keys,
                     'attachment_id' => $attachmentId,
                 ]);
+            }
+
+            // A file the user linked from their own Drive survives, but the
+            // cross-reference saying this note points at it should not: Drive's
+            // document manager would otherwise keep showing a note that no
+            // longer has the file. Deleting a document Notes uploaded removes
+            // its links in Drive already, so only the linked case needs this.
+            if ($attachment['drive_file_id'] !== null && $sesKey !== '') {
+                $this->unlinkFromDrive($sesKey, $note, (string) $attachment['drive_file_id']);
             }
 
             $this->activity->record($identity, ActivityRecorder::ATTACHMENT_REMOVED, $noteId, null, [
@@ -421,6 +543,30 @@ final class AttachmentService
         // The note's search text is built from its attachments, so removing one
         // has to take its OCR out of the index too.
         $this->jobs->enqueue($identity, JobQueue::DERIVED_TEXT, $noteId);
+    }
+
+    /**
+     * Drop the note↔document cross-reference in Drive.
+     *
+     * Best-effort and deliberately quiet. The attachment is already gone from
+     * the note by the time this runs, and Drive being unreachable is not a
+     * reason to refuse a detach the user asked for — it leaves a stale link
+     * row, which is untidy rather than harmful, and Drive's endpoint is
+     * idempotent so a later retry converges.
+     *
+     * Skipped entirely when Drive is switched off, which is the default.
+     */
+    /** @param array<string, mixed> $note */
+    private function unlinkFromDrive(string $sesKey, array $note, string $documentId): void
+    {
+        try {
+            $context = $this->driveContext($sesKey, $note);
+            if ($context !== null) {
+                (new DriveDocumentService())->unlink($context, $documentId);
+            }
+        } catch (\Throwable $e) {
+            Logger::warn('drive.unlink_skipped', ['error' => get_debug_type($e)]);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -440,9 +586,95 @@ final class AttachmentService
         );
     }
 
+    /**
+     * The store an attachment's bytes are in, with no caller behind it.
+     *
+     * The worker's view. It is enough for the local store, and deliberately not
+     * enough for Drive: see {@see enqueueProcessing()} for why no job that has
+     * to read a Drive object is ever queued in the first place.
+     */
     public function storeFor(array $attachment): ObjectStore
     {
         return DriveAttachmentService::storeFor((string) $attachment['storage_provider']);
+    }
+
+    /**
+     * The Drive context for one note, or null when Drive is not in play.
+     *
+     * Null rather than an exception when the flag is off: a deployment on the
+     * local store must never be asked for company parameters it has no use for,
+     * and building this eagerly would turn a working local upload into a 400.
+     *
+     * @param array<string, mixed> $note
+     */
+    private function driveContext(
+        string $sesKey,
+        array $note,
+        string $moduleCode = DriveContext::MODULE_ATTACHMENTS,
+    ): ?DriveContext {
+        if (!Features::enabled(Features::DRIVE)) {
+            return null;
+        }
+
+        return DriveContext::forNote($sesKey, (string) $note['id'], self::tenantOf($note), $moduleCode);
+    }
+
+    /** @param array<string, mixed> $note */
+    private static function tenantOf(array $note): ?string
+    {
+        // A personal note has no tenant, and null is not the same as ''. The
+        // difference decides whether the file is filed under the user or under
+        // the company, which is not a distinction to get wrong.
+        return ($note['tenant_id'] ?? null) === null ? null : (string) $note['tenant_id'];
+    }
+
+    /**
+     * Record an upload whose bytes never landed.
+     *
+     * The row exists so the attempt is visible — a client that polls this id
+     * sees `upload_status: failed` instead of waiting for a file that is not
+     * coming, and an operator can see that uploads are failing at all. It names
+     * no object (`storage_key` is empty) and queues no processing, because there
+     * is nothing to process; re-sending the same id clears it and tries again.
+     *
+     * Failing to write it must not replace the error that caused it: the caller
+     * needs to hear why the upload failed, not why the note-keeping did.
+     *
+     * @param array<string, mixed> $values
+     */
+    private function recordFailedAttempt(Identity $identity, array $values): void
+    {
+        try {
+            Connection::execute(
+                'INSERT INTO note_attachments
+                    (id, note_id, block_id, storage_provider, storage_key, drive_file_id,
+                     filename, mime_type, byte_size, checksum_sha256, kind,
+                     upload_status, processing_status, metadata, created_by)
+                 VALUES
+                    (:id, :note_id, :block_id, :storage_provider, \'\', NULL,
+                     :filename, :mime_type, :byte_size, :checksum, :kind,
+                     \'failed\', \'skipped\', :metadata::jsonb, :actor)
+                 ON CONFLICT (id) DO NOTHING',
+                [
+                    'id' => $values['id'],
+                    'note_id' => $values['note_id'],
+                    'block_id' => $values['block_id'],
+                    'storage_provider' => $values['storage_provider'],
+                    'filename' => $values['filename'],
+                    'mime_type' => $values['mime_type'],
+                    'byte_size' => $values['byte_size'],
+                    'checksum' => $values['checksum'],
+                    'kind' => $values['kind'],
+                    'metadata' => json_encode(
+                        ['source' => 'upload', 'upload_failed' => true],
+                        JSON_UNESCAPED_SLASHES,
+                    ),
+                    'actor' => $identity->userId,
+                ],
+            );
+        } catch (\Throwable $e) {
+            Logger::error('attachment.failed_row_not_written', ['error' => get_debug_type($e)]);
+        }
     }
 
     /**
@@ -592,6 +824,16 @@ final class AttachmentService
         // what came back — would be the first step away from that promise.
         $note = Connection::selectOne('SELECT privacy_mode FROM notes WHERE id = :id', ['id' => $noteId]);
         if ((string) ($note['privacy_mode'] ?? 'standard') === 'private') {
+            return 0;
+        }
+
+        // Every job below has to read the object back. For a Drive-stored file
+        // that means a call to Drive, and Drive is reached on the caller's own
+        // ses_key — which a cron worker does not have and must not be given.
+        // Queuing them anyway would produce a job that fails, retries and fails
+        // again for every upload; the honest state is that this deployment
+        // cannot derive anything from a file it does not hold.
+        if ((string) $attachment['storage_provider'] === 'drive') {
             return 0;
         }
 

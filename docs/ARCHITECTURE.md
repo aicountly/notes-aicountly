@@ -120,6 +120,31 @@ writes nothing, consecutive autosaves by one author inside a ten-minute window
 rewrite one entry, and an explicit checkpoint (manual save, restore, import) is
 never coalesced away.
 
+## Attachments live somewhere else
+
+A note is a document; a file is not. `note_attachments` is a join table — the
+note↔file relationship, the metadata seen at attach time, and what has been
+derived from the file — and never the bytes.
+
+Where the bytes go is decided in one place,
+`DriveAttachmentService::defaultStore()`: **AICOUNTLY Drive** when it is switched
+on, the local disk otherwise. Drive is the suite's storage platform, not an
+object store this API writes to, and the difference shapes the code. Drive hands
+out a presigned S3 URL, the bytes go **straight to the object store**, and Drive
+is then told to scan and promote them — four calls, one of which does not go to
+Drive at all. Notes runs that sequence in Drive's *proxy* mode, forwarding the
+caller's own session so Drive enforces its own permissions; the browser never
+talks to Drive.
+
+Two consequences worth carrying in your head. Reading follows the attachment
+row's `storage_provider`, never the current flag, so switching Drive on changes
+where *new* files go and nothing else. And a Drive download is a `302` to a
+short-lived presigned URL rather than bytes streamed through PHP — the request
+has already been authorised twice by then.
+
+[DRIVE_INTEGRATION.md](DRIVE_INTEGRATION.md) has the sequence, the key shapes,
+the failure semantics, and what is not built.
+
 ## Offline
 
 `localStorage` was the wrong tool: synchronous (so it blocks the editor's frame),

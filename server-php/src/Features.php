@@ -60,7 +60,9 @@ final class Features
      * usual way to get one wrong is to point production at sandbox.
      *
      * The flag stays the gate, so switching an integration on is still a
-     * deliberate act; `{PRODUCT}_API_URL` remains available as an override.
+     * deliberate act; `{PRODUCT}_API_ORIGIN` remains available as an override
+     * (and the older `{PRODUCT}_API_URL` is still read, so an existing .env
+     * keeps working after an upgrade).
      */
     private const REQUIRES_ENV = [
         self::AI => ['PULSE_API_URL'],

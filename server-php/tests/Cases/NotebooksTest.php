@@ -327,6 +327,40 @@ final class NotebooksTest extends TestCase
         $this->assertNotNull($second['id']);
     }
 
+    /**
+     * Reordering renumbers the *owner's* siblings, so it is the owner's call.
+     *
+     * The regression is worth spelling out: `position` used to be accepted at
+     * edit rights, and the renumbering selects siblings by `owner_user_id`
+     * rather than by what the caller can see. One share on one notebook was
+     * therefore enough for a guest to re-sequence the owner's entire root level
+     * — writing `position` and `updated_by` onto notebooks he had no grant on
+     * and could not read.
+     */
+    public function testAnEditorCannotReorderTheOwnersOtherNotebooks(): void
+    {
+        $secret = $this->notebook($this->alice, 'Secret');
+        $shared = $this->notebook($this->alice, 'Shared');
+        $this->shareNotebook($shared['id'], 'user-b', 'editor');
+
+        $result = $this->bob->patch('/notebooks/' . $shared['id'], ['position' => 0]);
+        $this->assertSame(403, $result['status']);
+        $this->assertSame('NOTEBOOK_ACCESS_DENIED', $result['body']['error']['code']);
+
+        $untouched = Connection::selectOne(
+            'SELECT position, updated_by FROM notebooks WHERE id = :id',
+            ['id' => $secret['id']],
+        );
+        $this->assertSame(0, (int) $untouched['position'], 'a notebook Bob cannot see keeps its place');
+        $this->assertSame('user-a', (string) $untouched['updated_by'], 'and is not stamped with his id');
+
+        // A PATCH that carries a rename alongside the refused position must be
+        // refused whole, not applied halfway.
+        $both = $this->bob->patch('/notebooks/' . $shared['id'], ['name' => 'Renamed', 'position' => 0]);
+        $this->assertSame(403, $both['status']);
+        $this->assertSame('Shared', $this->alice->get('/notebooks/' . $shared['id'])['body']['data']['name']);
+    }
+
     // -- Delete ------------------------------------------------------------
 
     public function testDeletingANotebookMovesItsNotesAndChildrenToTheParent(): void
@@ -395,6 +429,29 @@ final class NotebooksTest extends TestCase
         $this->assertSame(['Notes', 'Notes (2)'], $names);
     }
 
+    /**
+     * The name being vacated is not a name to rename around.
+     *
+     * A notebook may share its parent's name — the two sit in different places
+     * — so deleting "Work" hands its child "Work" up to where "Work" used to
+     * be. The free-name search runs against live rows, and the notebook was
+     * still live at that point, so the child was suffixed to dodge a row that
+     * was about to disappear: the user deleted one folder and was left with a
+     * single "Work (2)" and no "Work" anywhere.
+     */
+    public function testDeletingANotebookDoesNotRenameAChildAroundIt(): void
+    {
+        $work = $this->notebook($this->alice, 'Work');
+        $inner = $this->notebook($this->alice, 'Work', $work['id']);
+
+        $this->assertSame(200, $this->alice->delete('/notebooks/' . $work['id'])['status']);
+
+        $tree = $this->alice->get('/notebooks')['body']['data'];
+        $this->assertCount(1, $tree);
+        $this->assertSame('Work', $tree[0]['name'], 'the child keeps the name the deleted parent gave up');
+        $this->assertSame($inner['id'], $tree[0]['id']);
+    }
+
     // -- Members -----------------------------------------------------------
 
     public function testTheOwnerSharesANotebookAndTheGrantCascades(): void
@@ -446,6 +503,48 @@ final class NotebooksTest extends TestCase
         ]);
         $this->assertSame(422, $result['status']);
         $this->assertSame('VALIDATION_FAILED', $result['body']['error']['code']);
+    }
+
+    /**
+     * A role change must land on the grant that already exists, whatever case
+     * the id arrives in.
+     *
+     * The regression: the existence check matched `user_id` exactly while the
+     * unique constraint behind the upsert did too, so re-sharing with a
+     * differently-cased id found nothing, missed `ON CONFLICT`, and inserted a
+     * *second* grant. The endpoint answered 201 "added as viewer" while the
+     * editor row it was meant to replace stayed put — an owner told the
+     * downgrade succeeded, and a collaborator who kept writing.
+     */
+    public function testARoleChangeMatchesTheGrantWhateverCaseTheIdArrivesIn(): void
+    {
+        $notebook = $this->notebook($this->alice, 'Team');
+        $this->alice->post('/notebooks/' . $notebook['id'] . '/members', [
+            'user_id' => 'user-b',
+            'role' => 'editor',
+        ]);
+        $this->assertSame(200, $this->bob->patch('/notebooks/' . $notebook['id'], ['name' => 'Team edits'])['status']);
+
+        $downgrade = $this->alice->post('/notebooks/' . $notebook['id'] . '/members', [
+            'user_id' => 'USER-B',
+            'role' => 'viewer',
+        ]);
+        $this->assertSame(200, $downgrade['status'], 'a role change, not a second member');
+        $this->assertSame('user-b', $downgrade['body']['data']['user_id'], 'reported under the id actually stored');
+        $this->assertSame('viewer', $downgrade['body']['data']['role']);
+
+        $rows = Connection::select(
+            'SELECT role FROM notebook_members WHERE notebook_id = :id',
+            ['id' => $notebook['id']],
+        );
+        $this->assertCount(1, $rows, 'one person, one grant');
+        $this->assertSame('viewer', (string) $rows[0]['role']);
+
+        $this->assertSame(
+            403,
+            $this->bob->patch('/notebooks/' . $notebook['id'], ['name' => 'Team edits again'])['status'],
+            'the downgrade actually took effect',
+        );
     }
 
     public function testRemovingSomeoneWhoIsNotAMemberIsANotFound(): void
@@ -502,6 +601,10 @@ final class NotebooksTest extends TestCase
         $renamed = $this->bob->patch('/notebooks/' . $notebook['id'], ['name' => 'Team (renamed)']);
         $this->assertSame(200, $renamed['status']);
         $this->assertFalse($renamed['body']['data']['capabilities']['delete']);
+        // The map has to name every refusal below, or the UI offers a button
+        // that 403s on click.
+        $this->assertFalse($renamed['body']['data']['capabilities']['archive']);
+        $this->assertFalse($renamed['body']['data']['capabilities']['reorder']);
 
         // Moving and deleting change who can see the branch, so they stay with
         // the owner.
@@ -559,6 +662,84 @@ final class NotebooksTest extends TestCase
 
         $insideAcme = new ApiClient(Support::user('b', 'tenant-acme'));
         $this->assertSame(200, $insideAcme->get('/notebooks/' . $notebook['id'])['status']);
+    }
+
+    /**
+     * A notebook and its parent belong to the same company.
+     *
+     * A personal notebook (`tenant_id IS NULL`) is readable from inside every
+     * company, so the permission check alone lets a parent in one context
+     * accept a child from another. The result was the failure `resolveParent`
+     * already refuses across owners: a branch present in the company tree and
+     * absent from the personal one, and — moving the other way — one notebook
+     * appearing at two different places in the tree depending on which company
+     * the user was acting in.
+     */
+    public function testANotebookCannotBeFiledUnderOneFromAnotherCompany(): void
+    {
+        $personal = new ApiClient(Support::user('a', null));
+        $acme = new ApiClient(Support::user('a', 'tenant-acme'));
+
+        $personalRoot = $personal->post('/notebooks', ['name' => 'Personal'])['body']['data'];
+        $this->assertSame(200, $acme->get('/notebooks/' . $personalRoot['id'])['status'], 'readable from Acme');
+
+        $nested = $acme->post('/notebooks', ['name' => 'Acme work', 'parent_id' => $personalRoot['id']]);
+        $this->assertSame(403, $nested['status']);
+        $this->assertSame('NOTEBOOK_ACCESS_DENIED', $nested['body']['error']['code']);
+
+        $acmeRoot = $acme->post('/notebooks', ['name' => 'Acme root'])['body']['data'];
+        $stray = $personal->post('/notebooks', ['name' => 'Stray'])['body']['data'];
+        $this->assertSame(
+            403,
+            $acme->post('/notebooks/' . $stray['id'] . '/move', ['parent_id' => $acmeRoot['id']])['status'],
+        );
+
+        // Both trees still say the same thing about where "Stray" lives.
+        $this->assertSame(['Personal', 'Stray'], array_column($personal->get('/notebooks')['body']['data'], 'name'));
+        $this->assertCount(0, $acme->get('/notebooks/' . $acmeRoot['id'])['body']['data']['children']);
+    }
+
+    /**
+     * Archiving hides a whole branch from everyone it is shared with, so the
+     * one value that must never be read as "yes" is a client saying "no".
+     * `(bool) 'false'` is `true` in PHP, which is exactly how that happened.
+     */
+    public function testArchivingNeedsARealBoolean(): void
+    {
+        $notebook = $this->notebook($this->alice, 'Keep visible');
+
+        foreach (['false', 'no', 'off', '0'] as $no) {
+            $result = $this->alice->patch('/notebooks/' . $notebook['id'], ['is_archived' => $no]);
+            $this->assertFalse($result['body']['data']['is_archived'], '"' . $no . '" must not archive');
+        }
+
+        $rubbish = $this->alice->patch('/notebooks/' . $notebook['id'], ['is_archived' => ['yes']]);
+        $this->assertSame(422, $rubbish['status'], 'a value that means nothing is refused, not guessed at');
+    }
+
+    /**
+     * A malformed optional field is a refusal, not a silent erasure.
+     *
+     * Folding a non-scalar to null meant `{"description": {...}}` answered 200
+     * and wiped the description on the way through.
+     */
+    public function testAMalformedDescriptionIsRefusedRatherThanClearingIt(): void
+    {
+        $notebook = $this->alice->post('/notebooks', [
+            'name' => 'Clients',
+            'description' => 'Everything client-facing',
+        ])['body']['data'];
+
+        $result = $this->alice->patch('/notebooks/' . $notebook['id'], ['description' => ['oops']]);
+        $this->assertSame(422, $result['status']);
+        $this->assertSame(
+            'Everything client-facing',
+            $this->alice->get('/notebooks/' . $notebook['id'])['body']['data']['description'],
+        );
+
+        // Null still means "clear it" — that is a value, not a mistake.
+        $this->alice->patch('/notebooks/' . $notebook['id'], ['description' => null]);
+        $this->assertNull($this->alice->get('/notebooks/' . $notebook['id'])['body']['data']['description']);
     }
 
     public function testAMalformedNotebookIdIsNotFoundRatherThanAServerError(): void

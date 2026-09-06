@@ -24,6 +24,7 @@ import { Button, Dialog, EmptyState, LiveStatus, Skeleton } from '../../../share
 import { useFeature } from '../../../app/AppConfigProvider'
 import { ErrorNotice } from '../../organise/ErrorNotice'
 import { iconOrDefault } from '../../organise/appearance'
+import { useDefaultNotebook } from '../../settings/preferences'
 import type { Note, NoteTemplate } from '../../../shared/api/types'
 import {
   NOTE_TYPE_LABELS,
@@ -60,7 +61,11 @@ export function matchesTemplate(template: NoteTemplate, query: string): boolean 
 export interface TemplatePickerProps {
   open: boolean
   onClose: () => void
-  /** Where the new note should be filed. Null means the user's default place. */
+  /**
+   * Where the new note should be filed. Omitted or null means the notebook the
+   * user chose as their default in Settings, which is where that preference is
+   * read.
+   */
   notebookId?: string | null
   /** The created note, before the picker navigates to it. */
   onCreated?: (note: Note) => void
@@ -71,6 +76,7 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
   const templates = useTemplates()
   const start = useCreateNoteFromTemplate()
   const canvasEnabled = useFeature('canvas')
+  const [defaultNotebook] = useDefaultNotebook()
 
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
@@ -120,7 +126,7 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
     if (start.isPending) return
 
     start
-      .mutateAsync({ templateId: template.id, notebook_id: notebookId })
+      .mutateAsync({ templateId: template.id, notebook_id: notebookId ?? defaultNotebook })
       .then((note) => {
         onCreated?.(note)
         onClose()
@@ -178,7 +184,10 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
             value={query}
             disabled={start.isPending}
             aria-expanded={flat.length > 0}
-            aria-controls={listId}
+            // Only while the listbox is actually in the document: a reference
+            // to an id that is not there is a reference a screen reader
+            // follows to nothing.
+            aria-controls={flat.length > 0 ? listId : undefined}
             aria-autocomplete="list"
             aria-activedescendant={index >= 0 ? `${listId}-option-${index}` : undefined}
             onChange={(event) => {
@@ -199,11 +208,21 @@ export function TemplatePicker({ open, onClose, notebookId = null, onCreated }: 
           ) : flat.length === 0 ? (
             <EmptyState
               icon="template"
-              title={query.trim() === '' ? 'No templates yet' : `No template matches “${query.trim()}”`}
+              title={
+                query.trim() !== ''
+                  ? `No template matches “${query.trim()}”`
+                  : hiddenCount > 0
+                    ? 'No template can be used here'
+                    : 'No templates yet'
+              }
               description={
-                query.trim() === ''
-                  ? 'Templates you or your company make appear here, alongside the built-in ones.'
-                  : 'Try a word from the name, or clear the search to see them all.'
+                query.trim() !== ''
+                  ? 'Try a word from the name, or clear the search to see them all.'
+                  : hiddenCount > 0
+                    ? // "No templates yet" would be untrue: there are some, and
+                      // the reason none is offered is on the line below.
+                      'Every template this account can see needs a note type this workspace has switched off.'
+                    : 'Templates you or your company make appear here, alongside the built-in ones.'
               }
               action={
                 query.trim() === '' ? undefined : (

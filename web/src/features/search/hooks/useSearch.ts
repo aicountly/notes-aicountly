@@ -372,6 +372,15 @@ export interface RecentSearches {
   remember: (query: string) => void
   forget: (query: string) => void
   clear: () => void
+  /**
+   * Re-read the stored list.
+   *
+   * The search dialog is mounted more than once — the shell has one and the
+   * command palette carries its own — and each copy holds this state. Without
+   * a re-read on open, a search made in one is missing from the other's list
+   * until the page is reloaded.
+   */
+  reload: () => void
 }
 
 export function useRecentSearches(): RecentSearches {
@@ -381,6 +390,8 @@ export function useRecentSearches(): RecentSearches {
     setRecent(next)
     writeRecent(next)
   }, [])
+
+  const reload = useCallback(() => setRecent(readRecent()), [])
 
   const remember = useCallback(
     (query: string) => {
@@ -403,5 +414,5 @@ export function useRecentSearches(): RecentSearches {
 
   const clear = useCallback(() => persist([]), [persist])
 
-  return { recent, remember, forget, clear }
+  return { recent, remember, forget, clear, reload }
 }

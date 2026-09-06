@@ -25,8 +25,15 @@ use Aicountly\Api\Support\Logger;
  *   POST <endpoint>
  *   { "filename": …, "mime_type": …, "content_base64": … }
  *   → 200 { "text": …, "language": …, "segments": [ … ], "model": … }
+ *
+ * Not `final`, and for one reason: {@see OcrHandler} and
+ * {@see TranscriptionHandler} take an engine by constructor injection, and the
+ * only way to exercise what they do with a *successful* answer — record the
+ * text, write the transcript, roll the note's search index — is to stand a
+ * double in its place. A success path nothing can run is a success path nobody
+ * has checked.
  */
-final class RemoteEngine
+class RemoteEngine
 {
     private const CONNECT_TIMEOUT_SECONDS = 5;
 

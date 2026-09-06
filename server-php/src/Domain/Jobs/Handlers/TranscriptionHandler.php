@@ -91,6 +91,10 @@ final class TranscriptionHandler implements JobHandler
     /**
      * One transcript row per attachment, rewritten on a re-run.
      *
+     * A re-run is not exotic: a worker killed between writing this row and
+     * completing its job has the job handed back by the reaper, and the second
+     * attempt finds the transcript already there.
+     *
      * A user's correction lives in `edited_text`, so replacing the machine
      * `text` here never destroys it.
      *
@@ -104,9 +108,11 @@ final class TranscriptionHandler implements JobHandler
             ['attachment_id' => $attachment['id']],
         );
 
-        $bindings = [
-            'note_id' => $attachment['note_id'],
-            'attachment_id' => $attachment['id'],
+        // Exactly the values each statement names, and no others: PDO prepares
+        // for real here (ATTR_EMULATE_PREPARES is off), so a binding the SQL
+        // does not mention is not ignored — it is `HY093 Invalid parameter
+        // number`, and a re-run would fail on the row it was meant to update.
+        $content = [
             'model' => $result['model'],
             'language' => $result['language'],
             'status' => $status,
@@ -120,7 +126,7 @@ final class TranscriptionHandler implements JobHandler
                     SET model = :model, language = :language, status = :status,
                         text = :text, segments = :segments::jsonb, updated_at = now()
                   WHERE id = :id',
-                $bindings + ['id' => $existing['id']],
+                $content + ['id' => $existing['id']],
             );
 
             return;
@@ -130,7 +136,11 @@ final class TranscriptionHandler implements JobHandler
             'INSERT INTO note_transcripts
                 (id, note_id, attachment_id, provider, model, language, status, text, segments)
              VALUES (:id, :note_id, :attachment_id, \'remote\', :model, :language, :status, :text, :segments::jsonb)',
-            $bindings + ['id' => Uuid::v4()],
+            $content + [
+                'id' => Uuid::v4(),
+                'note_id' => $attachment['note_id'],
+                'attachment_id' => $attachment['id'],
+            ],
         );
     }
 }

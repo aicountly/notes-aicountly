@@ -25,6 +25,11 @@ export interface TemplatePreviewDialogProps {
   starting?: boolean
   /** Present when this template cannot be used here, and why. */
   blockedReason?: string | null
+  /**
+   * A failed attempt to start the note. Shown here rather than on the page
+   * behind this dialog, which nobody can read while it is open.
+   */
+  error?: unknown
 }
 
 export function TemplatePreviewDialog({
@@ -33,6 +38,7 @@ export function TemplatePreviewDialog({
   onUse,
   starting = false,
   blockedReason = null,
+  error = null,
 }: TemplatePreviewDialogProps) {
   // The list row is already correct for everything but the body, so the fetch
   // only ever adds to what is on screen — it never blanks it while loading.
@@ -64,6 +70,8 @@ export function TemplatePreviewDialog({
       }
     >
       <div className="tpl-preview">
+        {error ? <ErrorNotice error={error} /> : null}
+
         <dl className="tpl-facts">
           <div className="tpl-fact">
             <dt>Note type</dt>

@@ -208,6 +208,47 @@ describe('SmartFolderDialog', () => {
     expect(types).toContain('invoice')
   })
 
+  it('keeps a rule with its own row when the rule above it is removed', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+
+    await user.click(screen.getByRole('button', { name: 'Add rule' }))
+    await user.click(screen.getByRole('button', { name: 'Add rule' }))
+    await user.selectOptions(screen.getByLabelText('Rule 2'), 'tag')
+
+    // A half-typed tag lives inside the picker, not in the rule tree, so it is
+    // the thing that gets handed to the wrong rule when rows are keyed by
+    // position rather than by identity.
+    await user.type(screen.getByLabelText('Tag'), 'urg')
+    expect(screen.getByLabelText('Tag')).toHaveValue('urg')
+
+    await user.click(screen.getByRole('button', { name: 'Remove rule 1' }))
+
+    expect(screen.getByLabelText('Rule 1')).toHaveValue('tag')
+    expect(screen.getByLabelText('Tag')).toHaveValue('urg')
+  })
+
+  it('keeps showing a notebook the tree no longer lists instead of swapping the rule', async () => {
+    renderDialog({
+      id: 'sf-1',
+      name: 'Archived clients',
+      icon: null,
+      color: null,
+      position: 0,
+      rules: {
+        match: 'all',
+        conditions: [{ field: 'notebook', operator: 'is', value: '8b1c0c2e-0000-4000-8000-0000000000ff' }],
+      },
+    })
+
+    // The id is not in the tree the sidebar can see — archived, deleted, or
+    // shared away. Falling back to "Choose…" would show a rule the folder does
+    // not have, and saving would then send a rule nobody chose.
+    const select = await screen.findByLabelText('Notebook')
+    await waitFor(() => expect(select).toHaveValue('8b1c0c2e-0000-4000-8000-0000000000ff'))
+    expect(within(select).getByRole('option', { name: /already names/ })).toBeInTheDocument()
+  })
+
   it('caps the builder at the 25 rules the server allows', async () => {
     const user = userEvent.setup()
     renderDialog()

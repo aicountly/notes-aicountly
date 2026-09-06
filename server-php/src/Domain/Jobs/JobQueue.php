@@ -75,6 +75,16 @@ final class JobQueue
      * produces text asks for a rollup, and three attachments finishing together
      * should rebuild the note's search text once, not three times.
      *
+     * The identity of a job is the note and the attachment it names, so a job
+     * that names **neither** has no identity to be a duplicate of and is always
+     * inserted. {@see OBJECT_PURGE} is the case: it deliberately references no
+     * row (see {@see \Aicountly\Api\Domain\Attachments\AttachmentService::delete()})
+     * and carries the keys to remove in its payload, so two detached files are
+     * two different jobs that happen to look alike. Folding the second into the
+     * first would leave that file on the disk for good — a "deleted" attachment
+     * whose bytes are still there is the one outcome this queue must not
+     * produce.
+     *
      * @param array<string, mixed> $payload Ids, keys and counts only — never note content.
      * @return string|null The job id, or null when an identical job was already queued.
      */
@@ -90,19 +100,24 @@ final class JobQueue
         $actor = $requestedBy instanceof Identity ? $requestedBy->userId : $requestedBy;
         $tenant = $requestedBy instanceof Identity ? $requestedBy->tenantId : null;
 
-        $inserted = Connection::execute(
-            'INSERT INTO note_processing_jobs
+        $sql = 'INSERT INTO note_processing_jobs
                 (id, job_type, note_id, attachment_id, tenant_id, requested_by,
                  status, priority, payload, available_at)
              SELECT :id::uuid, :job_type::text, :note_id::uuid, :attachment_id::uuid, :tenant, :actor,
-                    \'queued\', :priority, :payload::jsonb, now() + make_interval(secs => :delay)
-             WHERE NOT EXISTS (
+                    \'queued\', :priority, :payload::jsonb, now() + make_interval(secs => :delay)';
+
+        if ($noteId !== null || $attachmentId !== null) {
+            $sql .= ' WHERE NOT EXISTS (
                 SELECT 1 FROM note_processing_jobs q
                 WHERE q.job_type = :job_type::text
                   AND q.status IN (\'queued\', \'processing\')
                   AND q.attachment_id IS NOT DISTINCT FROM :attachment_id::uuid
                   AND q.note_id IS NOT DISTINCT FROM :note_id::uuid
-             )',
+             )';
+        }
+
+        $inserted = Connection::execute(
+            $sql,
             [
                 'id' => $id,
                 'job_type' => $jobType,

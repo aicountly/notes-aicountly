@@ -7,7 +7,7 @@
  * link — see the `noteLink` extension.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { ApiError, api } from '../../shared/api/client'
@@ -31,11 +31,18 @@ export interface NoteLinkPickerProps {
 }
 
 export function NoteLinkPicker({ open, currentNoteId, onClose, onSelect }: NoteLinkPickerProps) {
+  const searchId = useId()
   const [term, setTerm] = useState('')
   const [debounced, setDebounced] = useState('')
 
+  // Both halves are cleared, not just the field: leaving `debounced` behind
+  // would re-run the previous search the moment the dialog is reopened, and
+  // show its hits under an empty search box.
   useEffect(() => {
-    if (!open) setTerm('')
+    if (!open) {
+      setTerm('')
+      setDebounced('')
+    }
   }, [open])
 
   useEffect(() => {
@@ -54,11 +61,11 @@ export function NoteLinkPicker({ open, currentNoteId, onClose, onSelect }: NoteL
   return (
     <Dialog open={open} onClose={onClose} title="Link to a note" width={520}>
       <div className="editor-field">
-        <label className="editor-field__label" htmlFor="note-link-search">
+        <label className="editor-field__label" htmlFor={searchId}>
           Search your notes
         </label>
         <input
-          id="note-link-search"
+          id={searchId}
           className="editor-field__input"
           type="search"
           autoComplete="off"

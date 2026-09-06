@@ -55,44 +55,69 @@ export interface SmartFolderDialogProps {
   onSaved?: (folder: SmartFolderNode, wasCreated: boolean) => void
 }
 
+/**
+ * A rule's identity, which its position is not.
+ *
+ * Keying the rows by index makes React reuse row 2's component instance for
+ * row 3 when row 2 is deleted, so whatever that instance was holding privately
+ * — the half-typed query inside a tag picker, most obviously — lands on the
+ * wrong rule. Conditions have no id on the wire, so one is minted per row and
+ * kept beside it for as long as the dialog is open.
+ */
+interface RuleRow {
+  key: string
+  condition: SmartFolderCondition
+}
+
+let ruleKeySeed = 0
+
+function keyedRows(conditions: readonly SmartFolderCondition[]): RuleRow[] {
+  return conditions.map((condition) => ({ key: `rule-${(ruleKeySeed += 1)}`, condition }))
+}
+
 export function SmartFolderDialog({ open, folder = null, onClose, onSaved }: SmartFolderDialogProps) {
   const create = useCreateSmartFolder()
   const update = useUpdateSmartFolder()
   const nameId = useId()
+  const nameErrorId = useId()
   const matchName = useId()
 
   const [name, setName] = useState('')
   const [icon, setIcon] = useState<string | null>(null)
   const [color, setColor] = useState<string | null>(null)
-  const [rules, setRules] = useState<SmartFolderRules>(EMPTY_RULES)
+  const [match, setMatch] = useState<SmartFolderRules['match']>(EMPTY_RULES.match)
+  const [rows, setRows] = useState<RuleRow[]>([])
   const [error, setError] = useState<unknown>(null)
 
   useEffect(() => {
     if (!open) return
+    const source = folder?.rules ?? EMPTY_RULES
     setName(folder?.name ?? '')
     setIcon(folder?.icon ?? null)
     setColor(folder?.color ?? null)
-    setRules(folder?.rules ?? EMPTY_RULES)
+    setMatch(source.match === 'any' ? 'any' : 'all')
+    setRows(keyedRows(source.conditions ?? []))
     setError(null)
   }, [open, folder])
+
+  const rules = useMemo<SmartFolderRules>(
+    () => ({ match, conditions: rows.map((row) => row.condition) }),
+    [match, rows],
+  )
 
   const editing = folder !== null
   const busy = create.isPending || update.isPending
   const fieldErrors = error instanceof ApiError ? error.fieldErrors : {}
   const trimmed = name.trim()
 
-  const conditionErrors = useMemo(
-    () => rules.conditions.map((condition) => conditionError(condition)),
-    [rules.conditions],
-  )
+  const conditionErrors = useMemo(() => rows.map((row) => conditionError(row.condition)), [rows])
   const hasInvalidRule = conditionErrors.some((message) => message !== null)
-  const atLimit = rules.conditions.length >= MAX_CONDITIONS
+  const atLimit = rows.length >= MAX_CONDITIONS
 
   const setCondition = (index: number, next: SmartFolderCondition) => {
-    setRules((current) => ({
-      ...current,
-      conditions: current.conditions.map((condition, position) => (position === index ? next : condition)),
-    }))
+    setRows((current) =>
+      current.map((row, position) => (position === index ? { ...row, condition: next } : row)),
+    )
   }
 
   const submit = () => {
@@ -151,10 +176,11 @@ export function SmartFolderDialog({ open, folder = null, onClose, onSaved }: Sma
             disabled={busy}
             data-autofocus=""
             aria-invalid={fieldErrors.name !== undefined}
+            aria-describedby={fieldErrors.name ? nameErrorId : undefined}
             onChange={(event) => setName(event.target.value)}
           />
           {fieldErrors.name ? (
-            <p className="org-error" role="alert">
+            <p className="org-error" id={nameErrorId} role="alert">
               {fieldErrors.name}
             </p>
           ) : null}
@@ -172,9 +198,9 @@ export function SmartFolderDialog({ open, folder = null, onClose, onSaved }: Sma
                   type="radio"
                   name={matchName}
                   value={mode}
-                  checked={rules.match === mode}
+                  checked={match === mode}
                   disabled={busy}
-                  onChange={() => setRules((current) => ({ ...current, match: mode }))}
+                  onChange={() => setMatch(mode)}
                 />
                 {mode === 'all' ? 'Match every rule' : 'Match any rule'}
               </label>
@@ -182,26 +208,21 @@ export function SmartFolderDialog({ open, folder = null, onClose, onSaved }: Sma
           </div>
         </fieldset>
 
-        {rules.conditions.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="org-empty">
             No rules yet — this folder would match every note you can open. Add a rule to narrow it.
           </p>
         ) : (
           <ul className="sf-rules">
-            {rules.conditions.map((condition, index) => (
+            {rows.map((row, index) => (
               <ConditionRow
-                key={index}
-                condition={condition}
+                key={row.key}
+                condition={row.condition}
                 index={index}
                 error={conditionErrors[index]}
                 disabled={busy}
                 onChange={(next) => setCondition(index, next)}
-                onRemove={() =>
-                  setRules((current) => ({
-                    ...current,
-                    conditions: current.conditions.filter((_item, position) => position !== index),
-                  }))
-                }
+                onRemove={() => setRows((current) => current.filter((_row, position) => position !== index))}
               />
             ))}
           </ul>
@@ -213,16 +234,14 @@ export function SmartFolderDialog({ open, folder = null, onClose, onSaved }: Sma
             size="sm"
             disabled={busy || atLimit}
             title={atLimit ? `A smart folder may have at most ${MAX_CONDITIONS} rules.` : undefined}
-            onClick={() =>
-              setRules((current) => ({ ...current, conditions: [...current.conditions, newCondition()] }))
-            }
+            onClick={() => setRows((current) => [...current, ...keyedRows([newCondition()])])}
           >
             Add rule
           </Button>
           <span className="org-hint">
             {atLimit
               ? `That is the limit of ${MAX_CONDITIONS} rules.`
-              : `${rules.conditions.length} of ${MAX_CONDITIONS} rules`}
+              : `${rows.length} of ${MAX_CONDITIONS} rules`}
           </span>
         </div>
 
@@ -351,6 +370,27 @@ function ConditionRow({
 // The control a value needs
 // ---------------------------------------------------------------------------
 
+/**
+ * The value a rule already holds, kept selectable when the list stopped
+ * offering it.
+ *
+ * A `<select>` whose value matches none of its options does not display that
+ * value — it shows the first option, or nothing. Either way the row then reads
+ * as a rule the folder does not have, and the next save either sends something
+ * the user never chose or a value the server refuses. A notebook that has been
+ * archived or deleted, a colour or a note type from a newer release, a record
+ * type behind a capability this deployment has switched off: each stays on
+ * screen, says it is not on offer, and stays exactly what will be sent back.
+ */
+function StoredValueOption({ value, label }: { value: string; label: string }) {
+  return <option value={value}>{label}</option>
+}
+
+/** True when `stored` is set and no option carries it. */
+function isUnlisted(stored: string, values: readonly string[]): boolean {
+  return stored !== '' && !values.includes(stored)
+}
+
 function ConditionValue({
   condition,
   disabled,
@@ -414,6 +454,9 @@ function ConditionValue({
 
   if (kind === 'notebook') {
     const options = flattenNotebooks(notebooks.data ?? [])
+    const stored = scalarValue(condition.value)
+    // Only once the tree has arrived: mid-load every id would look unlisted.
+    const unlisted = notebooks.isSuccess && isUnlisted(stored, options.map((option) => option.id))
 
     return (
       <div className="org-field sf-rule__value">
@@ -432,6 +475,9 @@ function ConditionValue({
           <option value="">
             {notebooks.isPending ? 'Loading notebooks…' : notebooks.isError ? 'Notebooks unavailable' : 'Choose…'}
           </option>
+          {unlisted ? (
+            <StoredValueOption value={stored} label="The notebook this rule already names" />
+          ) : null}
           {options.map((option) => (
             <option value={option.id} key={option.id}>
               {`${'  '.repeat(option.depth)}${option.name}`}
@@ -450,6 +496,8 @@ function ConditionValue({
             value: colour.value ?? '',
             label: colour.label,
           }))
+    const stored = scalarValue(condition.value)
+    const unlisted = isUnlisted(stored, options.map((option) => option.value))
 
     return (
       <div className="org-field sf-rule__value">
@@ -459,12 +507,13 @@ function ConditionValue({
         <select
           id={valueId}
           className="org-select"
-          value={scalarValue(condition.value)}
+          value={stored}
           disabled={disabled}
           aria-invalid={invalid}
           aria-describedby={describedBy}
           onChange={(event) => onChange(event.target.value)}
         >
+          {unlisted ? <StoredValueOption value={stored} label={`${stored} (not offered here)`} /> : null}
           {options.map((option) => (
             <option value={option.value} key={option.value}>
               {option.label}
@@ -478,6 +527,9 @@ function ConditionValue({
   if (kind === 'entity') {
     const entity = entityValue(condition.value)
     const available = ENTITY_TYPE_OPTIONS.filter((option) => option.feature === undefined || features[option.feature])
+    const unlistedType = isUnlisted(entity.entity_type, available.map((option) => option.value))
+    const unlistedLabel =
+      ENTITY_TYPE_OPTIONS.find((option) => option.value === entity.entity_type)?.label ?? entity.entity_type
 
     if (available.length === 0) {
       return <p className="sf-rule__static">No linked products are switched on for this workspace.</p>
@@ -497,6 +549,9 @@ function ConditionValue({
             onChange={(event) => onChange({ ...entity, entity_type: event.target.value })}
           >
             <option value="">Choose…</option>
+            {unlistedType ? (
+              <StoredValueOption value={entity.entity_type} label={`${unlistedLabel} (not switched on here)`} />
+            ) : null}
             {available.map((option) => (
               <option value={option.value} key={option.value}>
                 {option.label}

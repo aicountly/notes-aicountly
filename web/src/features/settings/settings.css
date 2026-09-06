@@ -191,6 +191,9 @@
 .set-usage__mono { font-family: var(--notes-font-mono); font-size: var(--notes-text-xs); word-break: break-all; }
 .set-usage__note { color: var(--notes-text-tertiary); font-weight: 400; }
 
+.set-link { color: var(--notes-primary); }
+.set-link:focus-visible { outline: 2px solid var(--notes-focus-ring); outline-offset: 2px; border-radius: var(--notes-radius-xs); }
+
 /* --- Shortcuts ------------------------------------------------------------ */
 
 .set-keys { width: 100%; border-collapse: collapse; text-align: left; }

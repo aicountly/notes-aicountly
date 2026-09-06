@@ -39,7 +39,7 @@ For the design decisions behind all of that, start with
 ```
 web/          React + Vite SPA. Builds to web/dist, deployed to the document root.
 server-php/   The API. Plain PHP 8.4, no dependencies. Deployed to api/ inside it.
-docs/         architecture, database, security, deployment, auth
+docs/         architecture, database, security, deployment, auth, integrations
 ```
 
 The API is **plain PHP with no Composer dependencies**, because it is deployed by
@@ -137,6 +137,28 @@ See `server-php/.env.example` for the full list, and
 [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for what is built,
 what is flagged off, and what is not built at all.
 
+## Attachments
+
+Attachment bytes never go in Postgres, and `note_attachments` is a join table
+rather than a second object store.
+
+Where the bytes go is one decision in one place: **AICOUNTLY Drive** when
+`NOTES_DRIVE_ENABLED=true`, the local disk under `NOTES_STORAGE_PATH` otherwise.
+
+Drive is the suite's storage platform — a metadata service in front of
+S3-compatible buckets — not a put/get object store. It issues a presigned S3 URL,
+the bytes go **straight to the object store**, and Drive is then told to scan the
+object and promote it out of quarantine; downloads come back as a short-lived
+presigned URL that Notes redirects to. Notes runs that sequence server-side on
+the caller's own session, so Drive enforces its own permissions and the browser
+never talks to Drive.
+
+Reading an existing attachment follows the row's `storage_provider`, not the
+current flag, so turning Drive on changes where new files go and nothing else.
+
+See [docs/DRIVE_INTEGRATION.md](docs/DRIVE_INTEGRATION.md) — including what is
+not built.
+
 ## Signing in
 
 Signing in is the AICOUNTLY portal's job, the same as every other AICOUNTLY SaaS:
@@ -174,5 +196,7 @@ The short version:
   and URL schemes.
 - `dangerouslySetInnerHTML` is not used anywhere in the frontend.
 - Note content never reaches a log line.
+- A presigned object-storage URL is **not** an AICOUNTLY origin, so a session key
+  is never sent with one — the signature is already in the URL.
 - AI retrieval is permission-filtered **before** ranking, never in the UI, and
   answers from your notes carry citations.

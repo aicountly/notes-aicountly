@@ -159,6 +159,11 @@ export function NotebookShareDialog({
           </div>
         ) : members.isError ? (
           <ErrorNotice error={members.error} onRetry={() => void members.refetch()} />
+        ) : (members.data ?? []).length === 0 ? (
+          // Reached when the server answers with nothing at all rather than the
+          // owner's own row. An empty list rendered as an empty box reads as a
+          // dialog that failed to load.
+          <p className="org-empty">Nobody else has access to this notebook yet.</p>
         ) : (
           <ul className="nb-members">
             {(members.data ?? []).map((member) => (

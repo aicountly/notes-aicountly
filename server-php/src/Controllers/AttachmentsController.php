@@ -64,10 +64,14 @@ final class AttachmentsController
         // limiting on the writing path.
         RateLimiter::hit('upload', $identity->userId);
 
+        // The caller's own bearer token goes with it: with Drive as the store,
+        // this API runs Drive's upload sequence *as the person who asked* and
+        // never as itself.
         return Response::created($this->attachments->upload(
             $identity,
             $request->uuidParam('id'),
             self::payload($request),
+            $request->bearerToken,
         ));
     }
 
@@ -76,8 +80,11 @@ final class AttachmentsController
     {
         RateLimiter::hit('upload', $identity->userId);
 
+        // The caller's own bearer token goes to Drive, so Drive re-checks that
+        // *this person* may see that file. See DriveAttachmentService::file().
         return Response::created($this->attachments->linkDrive(
             $identity,
+            $request->bearerToken,
             $request->uuidParam('id'),
             $request->string('drive_file_id'),
             $request->nullableString('block_id'),
@@ -86,10 +93,13 @@ final class AttachmentsController
 
     public function destroy(Request $request, Identity $identity): Response
     {
+        // The caller's own bearer token goes with it, so a linked Drive file's
+        // cross-reference is dropped as them rather than not at all.
         $this->attachments->delete(
             $identity,
             $request->uuidParam('id'),
             $request->uuidParam('attachmentId'),
+            $request->bearerToken,
         );
 
         return Response::noContent();
@@ -118,6 +128,7 @@ final class AttachmentsController
             $identity,
             $request->uuidParam('id'),
             $request->uuidParam('attachmentId'),
+            $request->bearerToken,
         );
 
         /** @var array<string, mixed> $attachment */

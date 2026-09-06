@@ -32,25 +32,25 @@ function envelope(data: unknown) {
   } as unknown as Response
 }
 
-function Harness({ initial = [] as string[] }) {
+function Harness({ initial = [] as string[], max }: { initial?: string[]; max?: number }) {
   const [value, setValue] = useState<string[]>(initial)
 
   return (
     <>
-      <TagPicker value={value} onChange={setValue} />
+      <TagPicker value={value} onChange={setValue} max={max} />
       <output data-testid="applied">{value.join('|')}</output>
     </>
   )
 }
 
-function renderPicker(initial: string[] = []) {
+function renderPicker(initial: string[] = [], max?: number) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
 
   render(
     <QueryClientProvider client={client}>
-      <Harness initial={initial} />
+      <Harness initial={initial} max={max} />
     </QueryClientProvider>,
   )
 }
@@ -139,6 +139,32 @@ describe('TagPicker', () => {
 
     await user.click(screen.getByRole('button', { name: 'Remove tag gst' }))
     expect(screen.getByTestId('applied')).toHaveTextContent('')
+  })
+
+  it('stays labelled and keyboard-reachable once the tag limit is reached', async () => {
+    const user = userEvent.setup()
+    renderPicker([], 1)
+
+    await user.click(screen.getByLabelText('Tags'))
+    await user.type(screen.getByLabelText('Tags'), 'gst')
+    await user.keyboard('{Enter}')
+
+    expect(screen.getByTestId('applied')).toHaveTextContent(/^gst$/)
+
+    // The field is disabled, not gone: unmounting it would leave the visible
+    // label pointing at nothing and drop focus to the top of the page.
+    const input = screen.getByLabelText('Tags')
+    expect(input).toBeDisabled()
+    expect(input).toHaveAccessibleDescription('Remove the tag above to choose another.')
+
+    // Focus lands on the only control still worth pressing.
+    const removeTag = screen.getByRole('button', { name: 'Remove tag gst' })
+    await waitFor(() => expect(removeTag).toHaveFocus())
+
+    // And freeing the slot hands the field back rather than dropping focus.
+    await user.click(removeTag)
+    expect(screen.getByTestId('applied')).toHaveTextContent('')
+    await waitFor(() => expect(screen.getByLabelText('Tags')).toHaveFocus())
   })
 
   it('says so when the tag list cannot be loaded', async () => {

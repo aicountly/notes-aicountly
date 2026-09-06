@@ -55,9 +55,11 @@ export function TagPicker({
 }: TagPickerProps) {
   const tags = useTags()
   const inputRef = useRef<HTMLInputElement>(null)
+  const chipsRef = useRef<HTMLUListElement>(null)
   const inputId = useId()
   const listId = useId()
   const optionId = useId()
+  const hintId = useId()
 
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -88,19 +90,40 @@ export function TagPicker({
     return matches
   }, [tags.data, query, appliedSlugs])
 
+  /**
+   * Focus, once the field's own enabled state has caught up.
+   *
+   * Applying the last allowed tag disables the input and freeing a slot
+   * re-enables it, and neither has happened in the DOM yet at the moment these
+   * handlers run. Focusing a disabled input silently does nothing, which is how
+   * a keyboard user ends up back at the top of the dialog.
+   */
+  const focusLater = (find: () => HTMLElement | null | undefined) => {
+    window.setTimeout(() => find()?.focus(), 0)
+  }
+
+  const lastRemoveButton = () =>
+    chipsRef.current?.querySelector<HTMLElement>('li:last-child .tag-chip__remove')
+
   const apply = (name: string) => {
     const next = uniqueTagNames([...value, name]).slice(0, max)
     onChange(next)
     setQuery('')
     setActive(0)
     setOpen(false)
-    inputRef.current?.focus()
+
+    // At the limit the field is on its way to disabled, so focus goes to the
+    // one control still worth pressing: taking a tag back off.
+    if (next.length >= max) focusLater(lastRemoveButton)
+    else inputRef.current?.focus()
   }
 
   const remove = (name: string) => {
     const slug = tagSlug(name)
     onChange(value.filter((applied) => tagSlug(applied) !== slug))
-    inputRef.current?.focus()
+
+    if (full) focusLater(() => inputRef.current)
+    else inputRef.current?.focus()
   }
 
   const commit = () => {
@@ -140,6 +163,12 @@ export function TagPicker({
     }
   }
 
+  // The list is a real element only while it is on screen; `aria-controls` and
+  // `aria-activedescendant` that point at an id nothing renders are worse than
+  // absent, because a screen reader reports the field as broken rather than
+  // as closed.
+  const listVisible = open && !full
+
   return (
     <div className="org-field tag-picker">
       <label className="org-label" htmlFor={inputId}>
@@ -147,7 +176,7 @@ export function TagPicker({
       </label>
 
       <div className={`tag-picker__box ${disabled ? 'tag-picker__box--disabled' : ''}`.trim()}>
-        <ul className="tag-picker__chips">
+        <ul className="tag-picker__chips" ref={chipsRef}>
           {value.map((name) => (
             <li key={tagSlug(name)}>
               <span className="tag-chip">
@@ -167,49 +196,57 @@ export function TagPicker({
           ))}
         </ul>
 
-        {full ? (
-          <p className="org-hint">
-            {max === 1 ? 'Remove the tag above to choose another.' : `That is the limit of ${max} tags.`}
-          </p>
-        ) : (
-          <input
-            ref={inputRef}
-            id={inputId}
-            className="tag-picker__input"
-            type="text"
-            role="combobox"
-            autoComplete="off"
-            aria-expanded={open && suggestions.length > 0}
-            aria-controls={listId}
-            aria-autocomplete="list"
-            aria-activedescendant={open && suggestions[active] ? `${optionId}-${active}` : undefined}
-            placeholder={placeholder}
-            value={query}
-            disabled={disabled}
-            onChange={(event) => {
-              setQuery(event.target.value)
-              setActive(0)
-              setOpen(true)
-            }}
-            onFocus={() => setOpen(true)}
-            // A blur that beats the click would close the list before the
-            // option under the pointer ever fires.
-            onBlur={() => window.setTimeout(() => setOpen(false), 120)}
-            onKeyDown={onKeyDown}
-          />
-        )}
+        {/* Kept in the document at the limit rather than swapped for the hint:
+            unmounting it would leave the visible label pointing at nothing and
+            drop focus to the top of the page the moment the last allowed tag
+            was applied. */}
+        <input
+          ref={inputRef}
+          id={inputId}
+          className="tag-picker__input"
+          type="text"
+          role="combobox"
+          autoComplete="off"
+          aria-expanded={listVisible && suggestions.length > 0}
+          aria-controls={listVisible ? listId : undefined}
+          aria-autocomplete="list"
+          aria-describedby={full ? hintId : undefined}
+          aria-activedescendant={listVisible && suggestions[active] ? `${optionId}-${active}` : undefined}
+          placeholder={full ? undefined : placeholder}
+          value={query}
+          disabled={disabled || full}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setActive(0)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          // A blur that beats the click would close the list before the
+          // option under the pointer ever fires.
+          onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+          onKeyDown={onKeyDown}
+        />
       </div>
 
-      {open && !full ? (
+      {full ? (
+        <p className="org-hint" id={hintId}>
+          {max === 1 ? 'Remove the tag above to choose another.' : `That is the limit of ${max} tags.`}
+        </p>
+      ) : null}
+
+      {listVisible ? (
         <ul className="tag-picker__list" id={listId} role="listbox" aria-label="Matching tags">
+          {/* A listbox's children are options. Loading, failure and "nothing
+              matches" are none of those, so they are marked as presentation
+              and their text is all that reaches the accessibility tree. */}
           {tags.isPending ? (
-            <li className="tag-picker__status">Loading tags…</li>
+            <li className="tag-picker__status" role="presentation">Loading tags…</li>
           ) : tags.isError ? (
-            <li className="tag-picker__status tag-picker__status--error" role="alert">
-              {tags.error.message}
+            <li className="tag-picker__status tag-picker__status--error" role="presentation">
+              <span role="alert">{tags.error.message}</span>
             </li>
           ) : suggestions.length === 0 ? (
-            <li className="tag-picker__status">
+            <li className="tag-picker__status" role="presentation">
               {query.trim() === '' ? 'No tags yet — type one to make it.' : 'Already added.'}
             </li>
           ) : (

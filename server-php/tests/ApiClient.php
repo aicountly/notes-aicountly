@@ -23,6 +23,9 @@ use Aicountly\Api\Routes;
  */
 final class ApiClient
 {
+    /** Stands in for the ses_key the front controller would have validated. */
+    public const SES_KEY = 'ses_test_key';
+
     private Router $router;
 
     public function __construct(private readonly Identity $identity)
@@ -73,7 +76,17 @@ final class ApiClient
                 return ['status' => 404, 'body' => ['success' => false, 'error' => ['code' => 'NOT_FOUND']]];
             }
 
-            $request = Request::forTesting($method, $normalised, array_map('strval', $query), $body);
+            // A synthetic ses_key. Every real request behind the router carries
+            // one, and an integration that forwards the caller's session to a
+            // sibling refuses an empty one — so a test client without a token
+            // could not reach those paths at all.
+            $request = Request::forTesting(
+                $method,
+                $normalised,
+                array_map('strval', $query),
+                $body,
+                self::SES_KEY,
+            );
             $request->routeParams = $matched['params'];
 
             // The front controller does this too; without it a test could not

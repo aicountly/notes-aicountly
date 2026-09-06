@@ -10,6 +10,7 @@ import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { fireEvent } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import { ThemeProvider } from '../../../shared/ui/ThemeProvider'
@@ -150,6 +151,25 @@ describe('CommandPalette', () => {
     fireEvent.keyDown(input, { key: 'Backspace' })
 
     expect(screen.getByRole('heading', { name: 'Commands' })).toBeInTheDocument()
+  })
+
+  /**
+   * The rows are pointed at, not focused. Clicking one must therefore not take
+   * the caret out of the field, or a command that keeps the palette open —
+   * every picker — hands back a dialog with nowhere to type.
+   */
+  it('keeps the caret in the field when a row is clicked into a picker', async () => {
+    const user = userEvent.setup()
+    const { input } = renderPalette()
+
+    const picker = screen
+      .getAllByRole('option')
+      .find((option) => option.textContent?.includes('Go to notebook'))
+
+    await user.click(picker as HTMLElement)
+
+    expect(screen.getByRole('heading', { name: 'Go to notebook' })).toBeInTheDocument()
+    expect(input).toHaveFocus()
   })
 
   it('closes on Escape', () => {

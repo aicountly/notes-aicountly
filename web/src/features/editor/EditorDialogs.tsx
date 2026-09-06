@@ -216,6 +216,10 @@ export function ImageDialog({
               disabled={uploading}
               onChange={(event) => {
                 const file = event.target.files?.[0]
+                // Cleared so that choosing the *same* file again after a failed
+                // upload still fires a change event; without this the retry is
+                // a file picker that does nothing.
+                event.target.value = ''
                 if (file) void upload(file)
               }}
             />

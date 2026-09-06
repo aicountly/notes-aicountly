@@ -65,6 +65,20 @@ export function SearchFilters({
 
   const count = activeFilterCount(value)
 
+  /**
+   * Why a picker is disabled, in the picker itself.
+   *
+   * "Any notebook" above an empty, greyed-out list reads as a bug. It matters
+   * which of the three reasons applies: still arriving, the lookup failed, or
+   * there genuinely are none to pick from.
+   */
+  const placeholder = (kind: 'notebook' | 'tag', empty: boolean): string => {
+    if (loading) return kind === 'notebook' ? 'Loading notebooks…' : 'Loading tags…'
+    if (lookupError) return 'Unavailable'
+    if (empty) return kind === 'notebook' ? 'No notebooks yet' : 'No tags yet'
+    return kind === 'notebook' ? 'Any notebook' : 'Any tag'
+  }
+
   return (
     <div className="search-filters" id={id}>
       <div className="search-filters__grid">
@@ -99,7 +113,7 @@ export function SearchFilters({
             disabled={loading || notebooks.length === 0}
             onChange={(event) => set('notebookId', event.target.value === '' ? null : event.target.value)}
           >
-            <option value="">{loading ? 'Loading notebooks…' : 'Any notebook'}</option>
+            <option value="">{placeholder('notebook', notebooks.length === 0)}</option>
             {notebooks.map((notebook) => (
               <option key={notebook.id} value={notebook.id}>
                 {'— '.repeat(notebook.depth)}
@@ -120,7 +134,7 @@ export function SearchFilters({
             disabled={loading || tags.length === 0}
             onChange={(event) => set('tagSlug', event.target.value === '' ? null : event.target.value)}
           >
-            <option value="">{loading ? 'Loading tags…' : 'Any tag'}</option>
+            <option value="">{placeholder('tag', tags.length === 0)}</option>
             {tags.map((tag) => (
               <option key={tag.id} value={tag.slug}>
                 {tag.name}

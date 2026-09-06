@@ -114,13 +114,14 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
   const optionRefs = useRef<Array<HTMLLIElement | null>>([])
 
   const term = useDebounced(query).trim()
-  const { recent, remember, forget, clear } = useRecentSearches()
+  const { recent, remember, forget, clear, reload } = useRecentSearches()
 
   // Every dialog opens on the same blank slate. Reopening onto a stale query,
   // or onto filters set for a different search and now hidden behind a closed
   // panel, is how a search box starts lying about what it is showing.
   useEffect(() => {
     if (!open) return
+    reload()
     setQuery('')
     setTab('all')
     setFilters(NO_FILTERS)
@@ -129,7 +130,7 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
     setLimit(SEARCH_PAGE_SIZE)
     setSelected(0)
     setCreateError(null)
-  }, [open])
+  }, [open, reload])
 
   const search = useNoteSearch({ query: term, filters, semantic, limit, enabled: open })
   const suggestions = useSearchSuggestions(term, open)
@@ -234,8 +235,47 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
       ? (suggestions.error ?? null)
       : (search.error ?? suggestions.error ?? null)
 
-  const busy = search.isFetching || suggestions.isFetching
-  const firstLoad = busy && search.data === undefined && suggestions.data === undefined
+  // A query fetching for the first time has nothing to show yet; one that is
+  // refetching still has its previous rows, and those stay on screen.
+  const notesArriving = search.isFetching && search.data === undefined
+  const suggestionsArriving = suggestions.isFetching && suggestions.data === undefined
+  const typed = query.trim()
+  /** The debounce has not fired, so anything on screen answers an older query. */
+  const debouncing = typed !== '' && typed !== term
+  const arriving =
+    tab === 'notes'
+      ? notesArriving
+      : tab === 'notebooks' || tab === 'tags'
+        ? suggestionsArriving
+        : notesArriving || suggestionsArriving
+
+  /**
+   * What the body shows, decided once rather than in a chain of ternaries that
+   * each know a little about the others.
+   *
+   * Rows win over an error and over a spinner. `/search/notes` and
+   * `/search/suggest` fail independently — semantic search has its own rate
+   * limit, so it can 429 while suggestions answer perfectly well — and blanking
+   * the notebooks that *did* arrive in favour of an error page would both throw
+   * away results and leave `aria-activedescendant` naming a row that is no
+   * longer rendered. The failure is reported above the rows instead.
+   *
+   * A tab with nothing in it says "loading" while the request or the debounce
+   * is still outstanding, so "Nothing matches" is only ever shown about an
+   * answer that actually came back.
+   */
+  const bodyState: 'recent' | 'loading' | 'results' | 'error' | 'empty' =
+    typed === ''
+      ? 'recent'
+      : rows.length > 0
+        ? 'results'
+        : debouncing || arriving
+          ? 'loading'
+          : activeError
+            ? 'error'
+            : 'empty'
+
+  const showingList = bodyState === 'results'
   const counts: Record<ResultTab, number> = {
     all: notes.length + notebooks.length + tags.length,
     notes: notes.length,
@@ -273,10 +313,14 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
             autoComplete="off"
             placeholder="Search notes, notebooks and tags…"
             value={query}
-            aria-expanded={rows.length > 0}
-            aria-controls={listId}
+            // Only ever true, and only ever pointing at ids, while the listbox
+            // below is the thing actually on screen.
+            aria-expanded={showingList}
+            aria-controls={showingList ? listId : undefined}
             aria-autocomplete="list"
-            aria-activedescendant={index >= 0 ? `${listId}-option-${index}` : undefined}
+            aria-activedescendant={
+              showingList && index >= 0 ? `${listId}-option-${index}` : undefined
+            }
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
           />
@@ -313,7 +357,13 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
               checked={semantic}
               onChange={(event) => {
                 setSemantic(event.target.checked)
-                if (event.target.checked) setFiltersOpen(false)
+                if (event.target.checked) {
+                  // `/search/semantic` takes a query and nothing else. Leaving
+                  // the filters set would show "Filters (3)" on a disabled
+                  // button next to a search that ignored all three of them.
+                  setFilters(NO_FILTERS)
+                  setFiltersOpen(false)
+                }
               }}
             />
             <span>Search by meaning</span>
@@ -355,16 +405,16 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
         </div>
 
         <div className="search__body">
-          {term === '' ? (
+          {bodyState === 'recent' ? (
             <RecentSearches
               recent={recent}
               onPick={setQuery}
               onForget={forget}
               onClear={clear}
             />
-          ) : firstLoad ? (
+          ) : bodyState === 'loading' ? (
             <ResultsSkeleton />
-          ) : activeError ? (
+          ) : bodyState === 'error' && activeError ? (
             <EmptyState
               icon={activeError.isOffline ? 'cloud-off' : 'alert'}
               title={activeError.isOffline ? 'Search needs a connection' : 'That search failed'}
@@ -382,7 +432,7 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
                 </Button>
               }
             />
-          ) : rows.length === 0 ? (
+          ) : bodyState === 'empty' ? (
             <EmptyState
               icon="search"
               title={`Nothing matches “${term}”`}
@@ -410,6 +460,18 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
             />
           ) : (
             <>
+              {/* One source failed and the other answered. Showing the rows
+                  that did arrive beats an error page that hides them, as long
+                  as the gap in them is said out loud. */}
+              {activeError ? (
+                <p className="search__error search__error--inline" role="status">
+                  <Icon name="alert" size={14} />
+                  {activeError.isOffline
+                    ? 'Some results are missing — this device is offline.'
+                    : `Some results are missing: ${activeError.message}`}
+                </p>
+              ) : null}
+
               <ul className="search__results" role="listbox" id={listId} aria-label="Search results">
                 {rows.map((row, position) => {
                   const showGroup =
@@ -431,6 +493,10 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
                         aria-selected={position === index}
                         className={`search__row ${position === index ? 'search__row--active' : ''}`}
                         onMouseMove={() => setSelected(position)}
+                        // The rows are named by aria-activedescendant rather
+                        // than focused, so keep the press from taking focus out
+                        // of the field the user is still typing in.
+                        onMouseDown={(event) => event.preventDefault()}
                         onClick={() => openRow(row)}
                       >
                         <ResultRow row={row} markers={search.data?.markers} />
@@ -464,17 +530,22 @@ export function SearchDialog({ open, onClose }: SearchDialogProps) {
 
           {createError ? (
             <p className="search__error" role="alert">
+              <Icon name="alert" size={14} />
               {createError}
             </p>
           ) : null}
         </div>
 
         <LiveStatus>
-          {term === ''
+          {bodyState === 'recent'
             ? ''
-            : busy
+            : bodyState === 'loading'
               ? 'Searching'
-              : `${rows.length} ${rows.length === 1 ? 'result' : 'results'} for ${term}`}
+              : bodyState === 'error'
+                ? `That search failed. ${activeError?.message ?? ''}`
+                : bodyState === 'empty'
+                  ? `Nothing matches ${term}`
+                  : `${rows.length} ${rows.length === 1 ? 'result' : 'results'} for ${term}`}
         </LiveStatus>
       </div>
     </Dialog>

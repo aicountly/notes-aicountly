@@ -23,10 +23,17 @@ export function ErrorNotice({
   error,
   onRetry,
   retryLabel = 'Try again',
+  onDismiss,
 }: {
   error: unknown
   onRetry?: () => void
   retryLabel?: string
+  /**
+   * Offered where the notice reports a *write* that failed rather than a read
+   * that can be re-run. Without it the sentence sits in the sidebar for the
+   * rest of the session with nothing the user can do about it.
+   */
+  onDismiss?: () => void
 }) {
   const offline = error instanceof ApiError && error.isOffline
 
@@ -35,11 +42,18 @@ export function ErrorNotice({
       <Icon name={offline ? 'cloud-off' : 'alert'} size={15} className="org-notice__icon" />
       <div className="org-notice__body">
         {describeError(error)}
-        {onRetry ? (
+        {onRetry || onDismiss ? (
           <div className="org-notice__actions">
-            <Button size="sm" icon="refresh" onClick={onRetry}>
-              {retryLabel}
-            </Button>
+            {onRetry ? (
+              <Button size="sm" icon="refresh" onClick={onRetry}>
+                {retryLabel}
+              </Button>
+            ) : null}
+            {onDismiss ? (
+              <Button size="sm" variant="ghost" icon="close" onClick={onDismiss}>
+                Dismiss
+              </Button>
+            ) : null}
           </div>
         ) : null}
       </div>

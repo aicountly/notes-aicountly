@@ -17,6 +17,7 @@
 import { useId, useRef, useState } from 'react'
 
 import { useFeature } from '../../../app/AppConfigProvider'
+import { getAppById, resolveAppOrigin } from '../../../services/appLauncher'
 import { ApiError } from '../../../shared/api/client'
 import { Icon } from '../../../shared/ui/Icon'
 import { Button, Dialog, EmptyState, Skeleton } from '../../../shared/ui/primitives'
@@ -28,6 +29,20 @@ import { useAttachments, formatBytes } from '../hooks/useAttachments'
 import { AttachmentBlock, PendingAttachmentBlock } from './AttachmentBlock'
 import { FileDropZone } from './FileDropZone'
 import '../attachments.css'
+
+/**
+ * Drive's own origin for THIS environment.
+ *
+ * Read from the launcher catalog rather than written out, because Drive's host
+ * is `drive.aicountly.com` in production and `drive.gh.aicountly.com` in
+ * sandbox — and because the catalog entry's id is `docs`, which is Drive's
+ * product code rather than its hostname. Hard-coding either is how a sandbox
+ * build ends up telling people to paste a production link.
+ */
+function driveOrigin(): string {
+  const drive = getAppById('docs')
+  return drive ? resolveAppOrigin(drive) : 'https://drive.aicountly.com'
+}
 
 /**
  * A Drive file id, from an id or from a link to it.
@@ -329,7 +344,7 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
             className="editor-field__input"
             data-autofocus
             value={driveInput}
-            placeholder="https://drive.aicountly.com/files/…"
+            placeholder={`${driveOrigin()}/documents/…`}
             onChange={(event) => setDriveInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {

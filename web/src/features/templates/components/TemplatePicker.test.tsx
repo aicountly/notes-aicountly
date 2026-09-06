@@ -137,6 +137,21 @@ describe('TemplatePicker', () => {
     await waitFor(() => expect(screen.getAllByText('Launch canvas').length).toBeGreaterThan(0))
   })
 
+  it('does not claim there are no templates when every one is switched off', async () => {
+    fetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/templates') && (init?.method ?? 'GET') === 'GET') {
+        return envelope([template({ id: 't-canvas', name: 'Launch canvas', note_type: 'canvas' })])
+      }
+      return envelope(null)
+    })
+
+    renderPicker()
+
+    expect(await screen.findByText('No template can be used here')).toBeInTheDocument()
+    expect(screen.queryByText('No templates yet')).not.toBeInTheDocument()
+  })
+
   it('filters on what a person would search by, keeping the groups in order', async () => {
     const user = userEvent.setup()
     renderPicker()

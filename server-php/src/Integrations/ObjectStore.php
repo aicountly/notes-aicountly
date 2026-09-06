@@ -30,10 +30,25 @@ interface ObjectStore
      * "Board pack Q3.pdf" would leak the document's subject to anyone who ever
      * saw a path, and a key that could be guessed would make the store itself
      * an access-control decision.
+     *
+     * A store that allocates its own addresses answers '' — see {@see put()}.
      */
     public function allocateKey(): string;
 
-    public function put(string $key, string $bytes, string $mimeType): void;
+    /**
+     * Write the object, and answer with the key it can be read back at.
+     *
+     * The return value is what callers must store, and it is not always the key
+     * that went in. {@see LocalObjectStore} writes where it was told and hands
+     * the same key back. {@see DriveObjectStore} cannot: Drive builds the object
+     * key itself out of tenant, product, module and entity, and only names the
+     * document once the upload has been scanned and promoted, so the address
+     * exists after the write rather than before it.
+     *
+     * `$filename` is the name the file should be *known by* in a store that has
+     * a catalogue. It is never used to build a key.
+     */
+    public function put(string $key, string $bytes, string $mimeType, string $filename = ''): string;
 
     /** The whole object. Throws when it is not there. */
     public function get(string $key): string;

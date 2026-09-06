@@ -85,6 +85,17 @@ const INTERVAL_UNIT: Record<Frequency, string> = {
 /** What "after a number of times" starts at. Ten is a quarter's worth of weeks. */
 const DEFAULT_COUNT = 10
 
+/**
+ * The 422 fields this form shows beside the control they belong to.
+ *
+ * Everything else the server can reject on — `note_id` when a note has hit its
+ * 25 reminders, `timezone`, `status`, `action_id` — has no control here, and a
+ * 422 says only "Some fields need attention." in its own message. Anything not
+ * in this set is printed as-is, because the alternative is a Save button that
+ * does nothing and says nothing.
+ */
+const INLINE_FIELDS = new Set(['due_at', 'recurrence_rule'])
+
 /** Tomorrow at nine: always in the future, whatever time it is now. */
 function defaultWhen(now: Date = new Date()): Date {
   const date = new Date(now)
@@ -145,6 +156,7 @@ export function ReminderDialog({
   const editing = reminder !== null
   const busy = create.isPending || update.isPending
   const fieldErrors = error instanceof ApiError ? error.fieldErrors : {}
+  const otherFieldErrors = Object.entries(fieldErrors).filter(([field]) => !INLINE_FIELDS.has(field))
   // A reminder is created under a note, so without one there is nowhere to
   // POST. Caught here rather than by a request to `/notes//reminders`.
   const missingNote = !editing && (noteId === undefined || noteId === '')
@@ -176,12 +188,20 @@ export function ReminderDialog({
     }))
   }
 
+  // Toggled off the state being updated rather than off the rendered value: two
+  // days ticked inside one batch would otherwise each start from the same
+  // `recurrence` and the second would drop the first.
   const toggleWeekday = (token: WeekdayToken) =>
-    patchRecurrence({
-      byDay: recurrence?.byDay.includes(token)
-        ? recurrence.byDay.filter((day) => day !== token)
-        : [...(recurrence?.byDay ?? []), token],
-    })
+    setRecurrence((current) =>
+      current === null
+        ? current
+        : {
+            ...current,
+            byDay: current.byDay.includes(token)
+              ? current.byDay.filter((day) => day !== token)
+              : [...current.byDay, token],
+          },
+    )
 
   const setEnd = (end: EndCondition) => patchRecurrence({ end })
 
@@ -253,6 +273,12 @@ export function ReminderDialog({
     >
       <div className="org-form">
         {error && Object.keys(fieldErrors).length === 0 ? <ErrorNotice error={error} /> : null}
+
+        {otherFieldErrors.map(([field, message]) => (
+          <p className="org-error" role="alert" key={field}>
+            {message}
+          </p>
+        ))}
 
         {missingNote ? (
           <p className="org-error" role="alert">

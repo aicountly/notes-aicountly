@@ -78,7 +78,11 @@ export const LIST_LIMIT = 100
 export function useReminders(scope: ReminderScope = 'all'): UseQueryResult<ReminderRow[], ApiError> {
   return useQuery<ReminderRow[], ApiError>({
     queryKey: [...queryKeys.reminders, scope],
-    queryFn: () => api.get<ReminderRow[]>('/reminders', { query: { status: scope, limit: LIST_LIMIT } }),
+    // The query's own signal, so switching scope aborts the list request the
+    // previous scope started rather than leaving it to land on a cache nobody
+    // is reading any more.
+    queryFn: ({ signal }) =>
+      api.get<ReminderRow[]>('/reminders', { query: { status: scope, limit: LIST_LIMIT }, signal }),
   })
 }
 

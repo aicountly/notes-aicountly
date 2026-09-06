@@ -64,6 +64,20 @@ export function fuzzyScore(query: string, text: string): number | null {
   return haystack.includes(needle) ? score + 6 : score
 }
 
+/**
+ * The modifier this keyboard has, written the way it is printed on the key.
+ *
+ * The rest of the app (the top bar, the shortcut reference) already does this;
+ * a palette that says "Ctrl N" on a Mac while the top bar next to it says "⌘ K"
+ * makes the reader wonder which of the two is out of date.
+ */
+function modifierLabel(): string {
+  const platform = typeof navigator === 'undefined' ? '' : (navigator.platform ?? '')
+  if (platform !== '') return platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl'
+
+  return /mac/i.test(navigator?.userAgent ?? '') ? '⌘' : 'Ctrl'
+}
+
 type PaletteMode = 'root' | 'notebook' | 'tag' | 'pulse'
 
 interface PaletteItem {
@@ -195,13 +209,14 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   }
 
   const commands = useMemo<PaletteItem[]>(() => {
+    const modifier = modifierLabel()
     const items: PaletteItem[] = [
       {
         key: 'new-note',
         label: 'New note',
         group: 'Create',
         icon: 'plus',
-        hint: 'Ctrl N',
+        hint: `${modifier} N`,
         keywords: 'create write document blank',
         run: () => void startNote('document', 'That note could not be created'),
       },
@@ -226,7 +241,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         label: 'Search notes',
         group: 'Go to',
         icon: 'search',
-        hint: 'Ctrl Shift F',
+        hint: `${modifier} Shift F`,
         keywords: 'find query text',
         run: () => {
           onClose()
@@ -483,7 +498,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             ) : lookupLoading ? (
               <PaletteSkeleton />
             ) : lookupError ? (
-              <PaletteLookupError error={lookupError} onBack={back} />
+              <PaletteLookupError
+                error={lookupError}
+                onBack={back}
+                onRetry={() => void (mode === 'notebook' ? notebooks : tags).refetch()}
+              />
             ) : items.length === 0 ? (
               <EmptyState
                 icon="search"
@@ -522,6 +541,13 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                         aria-selected={position === index}
                         className={`palette__item ${position === index ? 'palette__item--active' : ''}`}
                         onMouseMove={() => setSelected(position)}
+                        // A row is not focusable — it is named by
+                        // aria-activedescendant — so pressing the mouse on one
+                        // would otherwise pull focus out of the field. That is
+                        // invisible for a command that closes the palette and
+                        // very visible for one that does not: clicking "Go to
+                        // notebook…" would leave the picker with nowhere to type.
+                        onMouseDown={(event) => event.preventDefault()}
                         onClick={() => item.run()}
                       >
                         <span className="palette__item-icon">
@@ -543,7 +569,23 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             ) : null}
           </div>
 
-          <LiveStatus>{busy ? 'Creating your note' : ''}</LiveStatus>
+          {/* An answer that arrives in a panel nobody is looking at is an
+              answer nobody hears; Pulse's states are announced as they land. */}
+          <LiveStatus>
+            {busy
+              ? 'Creating your note'
+              : mode !== 'pulse'
+                ? ''
+                : ask.isPending
+                  ? 'Pulse is answering'
+                  : ask.error
+                    ? `Pulse could not answer. ${ask.error.message}`
+                    : ask.data
+                      ? `Pulse answered, citing ${ask.data.citations.length} ${
+                          ask.data.citations.length === 1 ? 'note' : 'notes'
+                        }.`
+                      : ''}
+          </LiveStatus>
         </div>
       </Dialog>
 
@@ -639,16 +681,31 @@ function PulseAnswerPanel({
   )
 }
 
-function PaletteLookupError({ error, onBack }: { error: ApiError; onBack: () => void }) {
+function PaletteLookupError({
+  error,
+  onBack,
+  onRetry,
+}: {
+  error: ApiError
+  onBack: () => void
+  onRetry: () => void
+}) {
   return (
     <EmptyState
       icon={error.isOffline ? 'cloud-off' : 'alert'}
       title={error.isOffline ? 'Unavailable offline' : 'That list could not be loaded'}
       description={error.message}
       action={
-        <Button variant="secondary" icon="chevron-left" onClick={onBack}>
-          Back to commands
-        </Button>
+        <div className="palette__error-actions">
+          {/* A dead end with only a way out is half an error state: the usual
+              cause is a connection that has since come back. */}
+          <Button variant="secondary" icon="refresh" onClick={onRetry}>
+            Try again
+          </Button>
+          <Button variant="ghost" icon="chevron-left" onClick={onBack}>
+            Back to commands
+          </Button>
+        </div>
       }
     />
   )

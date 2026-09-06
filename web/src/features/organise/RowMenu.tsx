@@ -104,7 +104,16 @@ export function RowMenu({ label, items, busy = false, ref }: RowMenuProps) {
   }
 
   return (
-    <div className="org-menu" ref={containerRef}>
+    <div
+      className="org-menu"
+      ref={containerRef}
+      // Tabbing out of a menu leaves it hanging over the row behind it, which
+      // is how a keyboard user ends up with two menus on screen. A pointer
+      // press elsewhere is handled above; this is the same thing for focus.
+      onBlur={(event) => {
+        if (!containerRef.current?.contains(event.relatedTarget)) setOpen(false)
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"

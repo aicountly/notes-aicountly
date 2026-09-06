@@ -39,14 +39,33 @@ use Aicountly\Api\Support\Logger;
  * retry only for a connection that never opened, and **no response body in any
  * log line** — another product's error text quotes back what was asked about,
  * which here is somebody's contacts and calendar.
+ *
+ * ## Object storage is not a sibling product
+ *
+ * {@see putBytes()} and {@see fetchBytes()} exist for one thing. AICOUNTLY Drive
+ * hands out **presigned S3 URLs**, and the bytes of an upload go straight to the
+ * object store rather than through Drive's API — see
+ * `drive-react-app/docs/UPLOAD_SAVE_FLOW.md`. That URL is not an AICOUNTLY
+ * origin, so those two methods are built to be structurally incapable of
+ * carrying an Authorization header: the signature is already *in* the URL, and a
+ * ses_key on that request would hand a live AICOUNTLY session to a third-party
+ * object store and to every proxy and access log between here and it. They are
+ * separate methods rather than a flag on {@see send()} for exactly that reason —
+ * there is no argument anyone can pass that turns the header back on.
  */
 final class AicountlyClient
 {
     private const CONNECT_TIMEOUT_SECONDS = 5;
     private const REQUEST_TIMEOUT_SECONDS = 15;
 
+    /** Bytes move slower than JSON, and one attachment may be tens of megabytes. */
+    private const TRANSFER_TIMEOUT_SECONDS = 120;
+
     /** Nothing asked for here is large; a runaway answer is a fault, not a payload. */
     private const MAX_RESPONSE_BYTES = 1048576;
+
+    /** The ceiling on a fetched object: well above the attachment limit, well below memory. */
+    private const MAX_OBJECT_BYTES = 268435456;
 
     /**
      * @param string $service Short name used in error envelopes and log keys.
@@ -55,11 +74,15 @@ final class AicountlyClient
      *        through {@see SiblingApi}. Not a URL and not an .env key: a
      *        deployment that wants to override the address sets
      *        `{PRODUCT}_API_ORIGIN`, and one that does not sets nothing.
+     * @param HttpTransport $http The socket itself. Replaced in tests so the
+     *        exact bytes of a request can be asserted on — including which
+     *        headers are absent — and never replaced in production.
      */
     public function __construct(
         private readonly string $service,
         private readonly string $feature,
         private readonly string $product,
+        private readonly HttpTransport $http = new CurlTransport(),
     ) {
     }
 
@@ -121,11 +144,11 @@ final class AicountlyClient
             ? null
             : (string) json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
 
-        $attempt = $this->exec($method, $url, $sesKey, $payload);
+        $attempt = $this->execAuthenticated($method, $url, $sesKey, $payload);
         if ($attempt['connection_failed']) {
             // Worth one more try: nothing was delivered, so nothing can be
             // duplicated by repeating it.
-            $attempt = $this->exec($method, $url, $sesKey, $payload);
+            $attempt = $this->execAuthenticated($method, $url, $sesKey, $payload);
         }
 
         return $this->interpret($method, $attempt);
@@ -183,16 +206,34 @@ final class AicountlyClient
             ));
         }
 
-        // Sibling products answer `{status: 1, data}` on success and
-        // `{status: 0, message}` on failure — often with HTTP 200 either way,
-        // which is why the status field has to be read rather than the code.
+        // Two envelopes exist in the suite, and this is the one place that has
+        // to know both:
         //
-        // Notes' OWN clients get `{success: true, data}`. The two envelopes are
-        // not the same shape and are deliberately not conflated: treating a
-        // `status: 0` refusal as a payload is how a permission denial reaches
-        // the UI as a row of nulls instead of an error.
-        if (array_key_exists('status', $decoded) && is_scalar($decoded['status'])) {
+        //   {status: 1, data}     Pulse, Books, the portal — `status: 0` with a
+        //                         `message` is the failure, and it often comes
+        //                         back on HTTP 200, so the field has to be read
+        //                         rather than the response code.
+        //   {success: true, data} Drive (`SesAuthController::jsonSuccess`), and
+        //                         Notes' own clients.
+        //
+        // Neither is guessed at: an envelope is recognised by its own key, and a
+        // refusal is never unwrapped as a payload. That last part is the whole
+        // point — treating `status: 0` as data is how a permission denial
+        // reaches the UI as a row of nulls instead of an error.
+        if (isset($decoded['status']) && is_numeric($decoded['status'])) {
             if ((int) $decoded['status'] !== 1) {
+                Logger::warn($this->service . '.refused', ['method' => $method, 'status' => $status]);
+                throw ApiException::upstream($this->service, sprintf(
+                    '%s could not answer this request.',
+                    ucfirst($this->service),
+                ));
+            }
+
+            return is_array($decoded['data'] ?? null) ? $decoded['data'] : [];
+        }
+
+        if (array_key_exists('success', $decoded)) {
+            if ($decoded['success'] !== true) {
                 Logger::warn($this->service . '.refused', ['method' => $method, 'status' => $status]);
                 throw ApiException::upstream($this->service, sprintf(
                     '%s could not answer this request.',
@@ -208,16 +249,105 @@ final class AicountlyClient
         return is_array($decoded['data'] ?? null) ? $decoded['data'] : $decoded;
     }
 
+    // -----------------------------------------------------------------------
+    // Presigned object storage
+    //
+    // Neither method below builds an Authorization header, and neither takes a
+    // ses_key it could build one from. See the class note.
+    // -----------------------------------------------------------------------
+
     /**
-     * One attempt.
+     * PUT bytes to a presigned URL a sibling product issued.
      *
-     * `connection_failed` is the retryable case and is kept distinct from an
-     * HTTP status: cURL reports both as a failed `exec`, and treating a 500
-     * like a refused connection is how a struggling service gets hit twice.
+     * One attempt only. A PUT is idempotent, but a transfer that timed out
+     * part-way through is not "nothing was delivered", and the honest move is to
+     * report the failure so the caller can abort its upload session — not to
+     * race a second copy of tens of megabytes against the first.
+     */
+    public function putBytes(string $url, string $bytes, string $contentType): void
+    {
+        Features::require($this->feature);
+
+        $attempt = $this->exec(
+            'PUT',
+            self::assertPresignedUrl($url),
+            [
+                // Exactly the type the URL was signed for and nothing else: an
+                // object store rejects a PUT whose signed headers disagree with
+                // what arrives.
+                'Content-Type: ' . $contentType,
+                // cURL adds `Expect: 100-continue` to a large body by itself,
+                // and several S3 implementations answer 417 to it.
+                'Expect:',
+            ],
+            $bytes,
+            self::TRANSFER_TIMEOUT_SECONDS,
+        );
+
+        if ($attempt['connection_failed'] || $attempt['status'] < 200 || $attempt['status'] >= 300) {
+            // No body in the log line: an object store quotes the key back in
+            // its errors, and a key names the product, the tenant and the file.
+            Logger::warn($this->service . '.object_put_failed', ['status' => $attempt['status']]);
+            throw ApiException::upstream($this->service, 'The file could not be uploaded — please try again.');
+        }
+    }
+
+    /** GET the bytes behind a presigned URL a sibling product issued. */
+    public function fetchBytes(string $url): string
+    {
+        Features::require($this->feature);
+
+        $attempt = $this->exec(
+            'GET',
+            self::assertPresignedUrl($url),
+            ['Accept: */*'],
+            null,
+            self::TRANSFER_TIMEOUT_SECONDS,
+            self::MAX_OBJECT_BYTES,
+        );
+
+        if ($attempt['status'] === 404 && !$attempt['connection_failed']) {
+            throw ApiException::notFound('That file');
+        }
+        if ($attempt['connection_failed'] || $attempt['status'] < 200 || $attempt['status'] >= 300) {
+            Logger::warn($this->service . '.object_get_failed', ['status' => $attempt['status']]);
+            throw ApiException::upstream($this->service, 'The file could not be read — please try again.');
+        }
+
+        return $attempt['body'];
+    }
+
+    /**
+     * A URL this API is willing to send bytes to, or read them from.
+     *
+     * The value arrives inside another product's JSON response, which makes it
+     * data rather than configuration. `file://`, `gopher://` and a bare path
+     * would each turn a confused or compromised sibling into a way to make this
+     * server read its own disk.
+     */
+    private static function assertPresignedUrl(string $url): string
+    {
+        $url = trim($url);
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+
+        if (($scheme !== 'https' && $scheme !== 'http') || (string) parse_url($url, PHP_URL_HOST) === '') {
+            throw ApiException::upstream(
+                'storage',
+                'The storage service returned an address this server will not use.',
+            );
+        }
+
+        return $url;
+    }
+
+    // -----------------------------------------------------------------------
+
+    /**
+     * One attempt, with the caller's session on it.
      *
      * @return array{connection_failed: bool, status: int, body: string}
      */
-    private function exec(string $method, string $url, string $sesKey, ?string $payload): array
+    private function execAuthenticated(string $method, string $url, string $sesKey, ?string $payload): array
     {
         $headers = [
             'Accept: application/json',
@@ -230,41 +360,36 @@ final class AicountlyClient
             $headers[] = 'Content-Type: application/json';
         }
 
-        $handle = curl_init($url);
-        if ($handle === false) {
-            return ['connection_failed' => true, 'status' => 0, 'body' => ''];
-        }
+        return $this->exec($method, $url, $headers, $payload);
+    }
 
-        $options = [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CUSTOMREQUEST => strtoupper($method),
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT_SECONDS,
-            CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS,
-            CURLOPT_HEADER => false,
-            // A redirect can point anywhere, and following it would hand the
-            // caller's ses_key to whatever host it names.
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_NOPROGRESS => false,
-            CURLOPT_PROGRESSFUNCTION => static fn ($resource, $downloadSize, $downloaded): int
-                => $downloaded > self::MAX_RESPONSE_BYTES ? 1 : 0,
-        ];
-        if ($payload !== null) {
-            $options[CURLOPT_POSTFIELDS] = $payload;
-        }
-        curl_setopt_array($handle, $options);
-
-        $response = curl_exec($handle);
-        $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        $failed = $response === false;
-        curl_close($handle);
-
-        return [
-            // No status at all means the exchange never got as far as an
-            // answer: DNS, TCP, TLS or a timeout.
-            'connection_failed' => $failed && $status === 0,
-            'status' => $status,
-            'body' => is_string($response) ? $response : '',
-        ];
+    /**
+     * One attempt.
+     *
+     * `connection_failed` is the retryable case and is kept distinct from an
+     * HTTP status: a socket-level failure and a 500 look alike to the transport,
+     * and treating a 500 like a refused connection is how a struggling service
+     * gets hit twice.
+     *
+     * @param array<int, string> $headers
+     * @return array{connection_failed: bool, status: int, body: string}
+     */
+    private function exec(
+        string $method,
+        string $url,
+        array $headers,
+        ?string $payload,
+        int $timeoutSeconds = self::REQUEST_TIMEOUT_SECONDS,
+        int $maxResponseBytes = self::MAX_RESPONSE_BYTES,
+    ): array {
+        return $this->http->send(
+            $method,
+            $url,
+            $headers,
+            $payload,
+            self::CONNECT_TIMEOUT_SECONDS,
+            $timeoutSeconds,
+            $maxResponseBytes,
+        );
     }
 }

@@ -84,3 +84,10 @@
 }
 .sf-preview__count { font-size: var(--notes-text-lg); font-weight: 650; color: var(--notes-text-primary); font-variant-numeric: tabular-nums; }
 .sf-preview__body { flex: 1; min-width: 0; }
+
+/* A control held back with aria-disabled rather than `disabled` keeps its place
+   in the tab order, so the sentence explaining why it cannot be used stays
+   reachable — but it still has to look unavailable, and app.css only dims the
+   real `disabled` state. */
+.nav-section__header .btn[aria-disabled='true'] { opacity: 0.5; cursor: not-allowed; }
+.nav-section__header .btn[aria-disabled='true']:hover { background: transparent; color: var(--notes-text-secondary); }

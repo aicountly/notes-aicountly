@@ -108,9 +108,12 @@ final class ShareService
 
         // Limited after the permission check, so a stranger probing note ids
         // cannot spend the budget of the owner they are probing. Sharing is
-        // limited at all because each grant is a notification to somebody
-        // else's inbox: a script that shared a note with a thousand ids would
-        // be spam sent under this deployment's name.
+        // limited at all because a grant is a real, immediate widening of who
+        // can read somebody's writing, and the act is cheap to script: without
+        // a bucket, one stolen session could hand a note to every id it can
+        // guess before anyone notices. (It is not limited because anything is
+        // emailed — this deployment has no notification service; see
+        // ReminderService, which says the same.)
         RateLimiter::hit('share', $identity->userId);
 
         $userId = self::memberUserId($input['user_id'] ?? null);
@@ -129,13 +132,20 @@ final class ShareService
             );
         }
 
-        // Matched exactly, the way the unique constraint the upsert targets
-        // matches: anything looser would report a role change and then insert
-        // a second grant.
-        $existing = Connection::selectOne(
-            'SELECT role FROM note_members WHERE note_id = :note_id AND user_id = :user',
-            ['note_id' => $noteId, 'user' => $userId],
-        );
+        // Matched the way every other path here matches a member: case
+        // insensitively. Removal and role changes already do (the front
+        // controller lower-cases the request path, so a mixed-case portal id
+        // never survives the trip through a URL), and matching *exactly* only
+        // here is what let one person end up holding two grants — the second
+        // spelling inserted a row beside the first instead of updating it,
+        // because the unique constraint is on the stored bytes. The owner then
+        // read "changed to viewer" while the editor grant they thought they had
+        // narrowed was still in force.
+        $existing = $this->findMember($noteId, $userId);
+
+        // Write against the spelling already stored, so the upsert's conflict
+        // target (note_id, user_id) lands on that row rather than beside it.
+        $memberId = $existing === null ? $userId : (string) $existing['user_id'];
 
         Connection::execute(
             'INSERT INTO note_members (id, note_id, user_id, role, invited_by)
@@ -145,7 +155,7 @@ final class ShareService
             [
                 'row_id' => Uuid::v4(),
                 'note_id' => $noteId,
-                'user' => $userId,
+                'user' => $memberId,
                 'role' => $role,
                 'actor' => $identity->userId,
             ],
@@ -157,12 +167,12 @@ final class ShareService
             $existing === null ? ActivityRecorder::MEMBER_ADDED : ActivityRecorder::MEMBER_ROLE_CHANGED,
             $noteId,
             null,
-            ['member_user_id' => $userId, 'role' => $role, 'previous_role' => $previous],
+            ['member_user_id' => $memberId, 'role' => $role, 'previous_role' => $previous],
         );
 
         return [
             'created' => $existing === null,
-            'member' => $this->requireMember($noteId, $userId),
+            'member' => $this->requireMember($noteId, $memberId),
         ];
     }
 
@@ -299,7 +309,19 @@ final class ShareService
 
     private static function memberUserId(mixed $value): string
     {
-        $userId = is_scalar($value) ? trim((string) $value) : '';
+        // A portal id is opaque text; an integer is taken because a JSON number
+        // is a plausible way to send one. A boolean is not an id at all — cast
+        // through (string), `true` becomes "1", which would file the grant
+        // against whoever happens to be user "1".
+        $userId = is_string($value) || is_int($value) ? (string) $value : '';
+
+        // Control characters are stripped rather than trimmed away, because of
+        // what one of them does further down: PDO hands the value to libpq as a
+        // C string, so `"user-b\0not-bob"` is stored as `user-b` — a grant to
+        // somebody other than the id the caller sent, with nothing to show for
+        // it. See CommentService::clean(), which exists for the same reason.
+        $userId = trim((string) preg_replace('/[\x00-\x1F\x7F]/', '', $userId));
+
         if ($userId === '' || mb_strlen($userId, 'UTF-8') > self::MAX_USER_ID) {
             throw ApiException::validation(['user_id' => 'Choose someone to share this note with.']);
         }

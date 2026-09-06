@@ -164,6 +164,57 @@ describe('SearchDialog', () => {
     expect(await screen.findByText('Too many searches. Try again in a minute.')).toBeInTheDocument()
   })
 
+  /**
+   * The two endpoints fail independently — semantic search has its own rate
+   * limit — so one of them falling over must not throw away what the other
+   * found, and must not leave the input pointing at a row that is no longer
+   * rendered.
+   */
+  it('keeps the results one endpoint returned when the other fails', async () => {
+    const { ApiError } = await vi.importActual<typeof import('../../../shared/api/client')>(
+      '../../../shared/api/client',
+    )
+    vi.mocked(api.getWithMeta).mockRejectedValue(
+      new ApiError('RATE_LIMITED', 'Too many searches. Try again in a minute.', 429),
+    )
+    vi.mocked(api.get).mockResolvedValue({
+      query: 'inv',
+      notes: [],
+      tags: [],
+      notebooks: [{ id: 'nb-1', name: 'Invoices', icon: null, color: null }],
+    })
+
+    const { input } = renderDialog()
+    fireEvent.change(input, { target: { value: 'invoice' } })
+
+    const option = await screen.findByRole('option')
+    expect(option).toHaveTextContent('Invoices')
+
+    // The failure is reported next to the rows rather than in place of them.
+    expect(screen.getByText(/Some results are missing/)).toBeInTheDocument()
+
+    // And Enter would open the row that is actually on screen.
+    expect(input).toHaveAttribute('aria-activedescendant', option.id)
+  })
+
+  /**
+   * "Nothing matches" is a claim about an answer, and the notebooks and tags
+   * have not answered yet. The note search returning first must not make the
+   * dialog say the search is over.
+   */
+  it('waits for every source before saying nothing matched', async () => {
+    vi.mocked(api.getWithMeta).mockResolvedValue({ data: [], meta: { has_more: false } })
+    vi.mocked(api.get).mockReturnValue(new Promise(() => {}))
+
+    const { input } = renderDialog()
+    fireEvent.change(input, { target: { value: 'invoice' } })
+
+    await waitFor(() => expect(vi.mocked(api.getWithMeta)).toHaveBeenCalled())
+
+    expect(screen.queryByText(/Nothing matches/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /New note/ })).not.toBeInTheDocument()
+  })
+
   it('says when semantic search fell back to keywords', async () => {
     vi.mocked(useFeature).mockReturnValue(true)
     vi.mocked(api.request).mockResolvedValue({

@@ -861,11 +861,20 @@ final class NotebookService
             // The same idea as NotePermissionService::capabilities(): the UI
             // disables what the caller cannot do instead of offering it and
             // failing on click.
+            // `archive` and `reorder` are listed separately from `edit`
+            // because they are not edits: archiving hides the branch from
+            // everyone it is shared with, and reordering renumbers siblings
+            // the caller may not even be able to see. Both are owner-only, and
+            // a UI that gated them on `edit` would offer an editor two buttons
+            // that answer 403 — which is the one thing this map exists to
+            // prevent.
             'capabilities' => [
                 'view' => true,
                 'edit' => NoteRole::atLeast($role, NoteRole::EDITOR),
                 'add_notes' => NoteRole::atLeast($role, NoteRole::EDITOR),
                 'move' => $role === NoteRole::OWNER,
+                'reorder' => $role === NoteRole::OWNER,
+                'archive' => $role === NoteRole::OWNER,
                 'delete' => $role === NoteRole::OWNER,
                 'manage_members' => $role === NoteRole::OWNER,
             ],

@@ -76,6 +76,36 @@ describe('SlashCommandMenu', () => {
 
     expect(screen.getByText('No blocks match what you typed.')).toBeInTheDocument()
   })
+
+  it('names each group, rather than drawing a heading only sighted users get', () => {
+    renderMenu()
+
+    expect(screen.getByRole('group', { name: 'Basic' })).toContainElement(
+      screen.getAllByRole('option')[0],
+    )
+    expect(screen.getByRole('group', { name: 'Blocks' })).toContainElement(
+      screen.getAllByRole('option')[2],
+    )
+  })
+
+  it('keeps the rows out of the tab order so the caret stays in the note', () => {
+    renderMenu()
+
+    for (const option of screen.getAllByRole('option')) {
+      expect(option).toHaveAttribute('tabindex', '-1')
+    }
+  })
+
+  it('scrolls the highlighted row into view, since the list is taller than the panel', () => {
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(() => undefined)
+
+    renderMenu({ activeIndex: 2 })
+
+    expect(scrollIntoView).toHaveBeenCalled()
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(screen.getAllByRole('option')[2])
+  })
 })
 
 describe('useSuggestionMenu', () => {

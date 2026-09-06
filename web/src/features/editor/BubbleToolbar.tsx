@@ -32,6 +32,7 @@ function ToolbarButton({
   label,
   icon,
   active,
+  opensDialog = false,
   onClick,
   children,
   className = '',
@@ -39,6 +40,11 @@ function ToolbarButton({
   label: string
   icon: IconName
   active?: boolean
+  /**
+   * The press opens a dialog rather than toggling a mark. `aria-pressed` would
+   * be a lie on one of those — it says "this is on", and the dialog is not.
+   */
+  opensDialog?: boolean
   onClick: () => void
   children?: ReactNode
   className?: string
@@ -49,7 +55,8 @@ function ToolbarButton({
       className={`bubble-toolbar__button ${active ? 'bubble-toolbar__button--active' : ''} ${className}`.trim()}
       aria-label={label}
       title={label}
-      aria-pressed={active}
+      aria-pressed={opensDialog ? undefined : active}
+      aria-haspopup={opensDialog ? 'dialog' : undefined}
       // Taking the press on mousedown keeps the text selection intact; letting
       // the button take focus first would collapse it before the command runs.
       onMouseDown={(event) => event.preventDefault()}
@@ -130,6 +137,7 @@ export function BubbleToolbar({ editor, aiEnabled, onAskPulse, onEditLink }: Bub
         label={marks?.link ? 'Edit link' : 'Add link'}
         icon="link"
         active={marks?.link}
+        opensDialog
         onClick={onEditLink}
       />
 
@@ -140,6 +148,7 @@ export function BubbleToolbar({ editor, aiEnabled, onAskPulse, onEditLink }: Bub
             label="Ask Pulse about this selection"
             icon="pulse"
             className="bubble-toolbar__button--pulse"
+            opensDialog
             onClick={onAskPulse}
           >
             <span>Ask Pulse</span>

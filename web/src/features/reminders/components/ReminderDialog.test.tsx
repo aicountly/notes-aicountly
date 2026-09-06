@@ -186,6 +186,35 @@ describe('ReminderDialog recurrence', () => {
     expect(lastBody()).not.toHaveProperty('recurrence_rule')
   })
 
+  it('shows a refusal it has no control for rather than failing silently', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+
+    // `note_id` has no field in this form, and the 422 that carries it says
+    // only "Some fields need attention." in its own message. Swallowing it
+    // leaves a Save button that does nothing and explains nothing.
+    fetchMock.mockImplementation(
+      async () =>
+        ({
+          ok: false,
+          status: 422,
+          text: async () =>
+            JSON.stringify({
+              success: false,
+              error: {
+                code: 'VALIDATION_FAILED',
+                message: 'Some fields need attention.',
+                details: { fields: { note_id: 'You already have 25 reminders on this note.' } },
+              },
+            }),
+        }) as unknown as Response,
+    )
+
+    await save(user)
+
+    expect(await screen.findByText('You already have 25 reminders on this note.')).toBeInTheDocument()
+  })
+
   it('replaces an unshowable rule only when the user asks for it', async () => {
     const user = userEvent.setup()
     renderDialog(reminderRecord({ recurrence_rule: 'FREQ=MONTHLY;BYDAY=2TU' }))

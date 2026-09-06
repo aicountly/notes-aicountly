@@ -175,7 +175,7 @@ final class CommentService
                 'anchor_text' => self::anchorText($input['anchor_text'] ?? null),
                 'body' => $body,
                 'author' => $identity->userId,
-                'mentions' => (string) json_encode($mentions),
+                'mentions' => self::encodeMentions($mentions),
             ],
         );
 
@@ -221,7 +221,7 @@ final class CommentService
         // key must not be read as "there are none".
         if (array_key_exists('mentions', $input)) {
             $updates[] = 'mentions = :mentions::jsonb';
-            $bindings['mentions'] = (string) json_encode(self::mentions($input['mentions']));
+            $bindings['mentions'] = self::encodeMentions(self::mentions($input['mentions']));
         }
 
         Connection::execute(
@@ -560,9 +560,36 @@ final class CommentService
         return $parent['parent_id'] === null ? (string) $parent['id'] : (string) $parent['parent_id'];
     }
 
+    /**
+     * Text as the database can actually store it.
+     *
+     * A `\u0000` escape is legal JSON, so a body carrying one arrives here as
+     * a real 0x00 byte — and PDO hands parameters to libpq as C strings, so
+     * `"visible\0HIDDEN"` is stored as `visible`. Half a comment, reported as
+     * saved — the silent loss {@see self::body()} refuses to perform when the
+     * reason is length. Inside a `jsonb` value the same byte is not truncated
+     * but rejected outright (`unsupported Unicode escape sequence`), so one
+     * mention id carrying one was enough to turn a comment into a 500.
+     *
+     * Control characters carry no meaning in a comment, so they are dropped
+     * here — before anything is measured, so a body of nothing but control
+     * bytes is the empty comment it really is. Deliberately byte-wise (no `/u`):
+     * these are ASCII bytes that cannot appear inside a multi-byte sequence,
+     * and a pattern that can fail on odd input is not what should stand between
+     * a caller and a 500.
+     */
+    private static function clean(string $value, bool $keepBreaks = true): string
+    {
+        // Tab, newline and carriage return survive $keepBreaks: a comment is
+        // written in a textarea and people press enter in one.
+        $pattern = $keepBreaks ? '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/' : '/[\x00-\x1F\x7F]/';
+
+        return (string) preg_replace($pattern, '', $value);
+    }
+
     private function body(mixed $value): string
     {
-        $body = is_scalar($value) ? trim((string) $value) : '';
+        $body = is_scalar($value) ? trim(self::clean((string) $value)) : '';
         if ($body === '') {
             throw ApiException::validation(['body' => 'A comment needs something in it.']);
         }
@@ -582,7 +609,7 @@ final class CommentService
         if (!is_scalar($value)) {
             return null;
         }
-        $blockId = trim((string) $value);
+        $blockId = trim(self::clean((string) $value, keepBreaks: false));
         if ($blockId === '') {
             return null;
         }
@@ -598,7 +625,7 @@ final class CommentService
         if (!is_scalar($value)) {
             return null;
         }
-        $text = trim((string) $value);
+        $text = trim(self::clean((string) $value));
 
         return $text === '' ? null : Str::limit($text, self::MAX_ANCHOR_TEXT);
     }
@@ -626,7 +653,10 @@ final class CommentService
             if (!is_scalar($id)) {
                 continue;
             }
-            $id = trim((string) $id);
+            // Cleaned before it reaches `mentions::jsonb`, where a control byte
+            // is not truncated but refused — and a refused INSERT here is a 500
+            // on a comment somebody was trying to post.
+            $id = trim(self::clean((string) $id, keepBreaks: false));
             if ($id === '') {
                 continue;
             }
@@ -637,6 +667,24 @@ final class CommentService
         }
 
         return array_keys($ids);
+    }
+
+    /**
+     * The `jsonb` literal for a mention list.
+     *
+     * `json_encode` returns `false` on input it cannot represent, and `(string)
+     * false` is the empty string — which Postgres then refuses as invalid JSON,
+     * turning a comment nobody could have written differently into a 500. An
+     * empty list is the honest fallback: the ids are a convenience, the comment
+     * is the thing being saved.
+     *
+     * @param array<int, string> $mentions
+     */
+    private static function encodeMentions(array $mentions): string
+    {
+        $encoded = json_encode($mentions);
+
+        return is_string($encoded) ? $encoded : '[]';
     }
 
     /** @return array<int, string> */

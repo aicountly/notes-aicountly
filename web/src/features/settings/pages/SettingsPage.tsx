@@ -59,6 +59,13 @@ export default function SettingsPage() {
 
   const notebookOptions = flattenNotebooks(notebooks.data ?? []).filter((option) => !option.is_archived)
 
+  // Dismissing the dialog drops the failure with it: reopening it should not
+  // reopen an error about an attempt the user has moved on from.
+  const closeConfirm = () => {
+    setConfirmClear(false)
+    setClearError(null)
+  }
+
   const clear = () => {
     setClearing(true)
     setClearError(null)
@@ -134,12 +141,15 @@ export default function SettingsPage() {
           <Field
             label="Default notebook"
             hint="Where a note goes when it is created without a notebook in mind — starting one from a template, for instance."
+            notice={
+              notebooks.isError ? (
+                <ErrorNotice error={notebooks.error} onRetry={() => void notebooks.refetch()} />
+              ) : null
+            }
           >
             {notebooks.isPending ? (
               <Skeleton width="100%" height={36} radius={8} />
-            ) : notebooks.isError ? (
-              <ErrorNotice error={notebooks.error} onRetry={() => void notebooks.refetch()} />
-            ) : (
+            ) : notebooks.isError ? null : (
               <select
                 className="org-select"
                 value={defaultNotebook ?? ''}
@@ -168,11 +178,10 @@ export default function SettingsPage() {
 
               return (
                 <li className={`set-feature ${on ? '' : 'set-feature--off'}`.trim()} key={row.flag}>
-                  {/* The icon and the word carry the state; the colour only
-                      echoes them. */}
+                  {/* Decorative: the badge below carries the state in words,
+                      so the colour and the icon only echo it. */}
                   <span className="set-feature__state">
                     <Icon name={on ? 'check' : 'close'} size={15} />
-                    <span className="sr-only">{on ? 'On' : 'Off'}</span>
                   </span>
 
                   <div className="set-feature__body">
@@ -222,8 +231,6 @@ export default function SettingsPage() {
                 </div>
               </dl>
 
-              {clearError ? <ErrorNotice error={clearError} /> : null}
-
               <div className="set-actions">
                 <Button icon="trash" variant={usage.pending > 0 ? 'danger' : 'secondary'} onClick={() => setConfirmClear(true)}>
                   Clear offline data
@@ -258,6 +265,17 @@ export default function SettingsPage() {
               <dd className="set-usage__mono">{getApiBaseUrl()}</dd>
             </div>
             <div>
+              <dt>Is the server up?</dt>
+              <dd>
+                {/* The health endpoint answers without a session, so this link
+                    works even when the thing that is broken is sign-in. */}
+                <a className="set-link" href={`${getApiBaseUrl()}/health`} target="_blank" rel="noreferrer">
+                  Open the health check
+                </a>
+                <span className="set-usage__note"> — whether the API, its database and its job queue are answering</span>
+              </dd>
+            </div>
+            <div>
               <dt>Trash is emptied after</dt>
               <dd>
                 {config.limits.trash_retention_days}{' '}
@@ -285,7 +303,7 @@ export default function SettingsPage() {
       {confirmClear && usage ? (
         <Dialog
           open
-          onClose={() => setConfirmClear(false)}
+          onClose={closeConfirm}
           title="Clear offline data?"
           description={
             usage.pending > 0
@@ -295,7 +313,7 @@ export default function SettingsPage() {
           width={440}
           footer={
             <>
-              <Button onClick={() => setConfirmClear(false)} disabled={clearing}>
+              <Button onClick={closeConfirm} disabled={clearing}>
                 Cancel
               </Button>
               <Button variant="danger" icon="trash" loading={clearing} onClick={clear}>
@@ -304,6 +322,8 @@ export default function SettingsPage() {
             </>
           }
         >
+          {clearError ? <ErrorNotice error={clearError} /> : null}
+
           <p className="set-hint">
             {usage.notes} cached {usage.notes === 1 ? 'note' : 'notes'} will be removed from this device. You will
             need a connection to read them again.
@@ -343,20 +363,32 @@ function Section({
 function Field({
   label,
   hint,
+  notice,
   children,
 }: {
   label: string
   hint: string
+  /** Shown beside the field rather than inside its label — see below. */
+  notice?: ReactNode
   children: ReactNode
 }) {
   return (
     <div className="set-field">
       {/* A label wrapping its control needs no id to match, which is one fewer
-          thing to get wrong when the control is a skeleton half the time. */}
-      <label className="set-field__label">
+          thing to get wrong when the control is a skeleton half the time. It
+          may only wrap the control, though: anything else inside it — a retry
+          button in an error notice — takes the label's words as its own
+          accessible name. So a field with no control renders plain text, and
+          `notice` sits outside the label. */}
+      {children === null ? (
         <span className="org-label">{label}</span>
-        {children}
-      </label>
+      ) : (
+        <label className="set-field__label">
+          <span className="org-label">{label}</span>
+          {children}
+        </label>
+      )}
+      {notice}
       <p className="set-hint">{hint}</p>
     </div>
   )

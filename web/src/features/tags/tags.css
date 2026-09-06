@@ -97,6 +97,9 @@
   padding: 2px 0;
 }
 .tag-picker__input::placeholder { color: var(--notes-text-tertiary); }
+/* At the tag limit the field stays in the document — see TagPicker — so it has
+   to read as unavailable rather than merely empty. */
+.tag-picker__input:disabled { cursor: not-allowed; }
 
 .tag-picker__list {
   position: absolute;

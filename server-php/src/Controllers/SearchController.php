@@ -104,6 +104,13 @@ final class SearchController
             // results" while `mode` says otherwise is misreporting, so this
             // travels with every response rather than only with the failures.
             'mode' => $result['mode'],
+            // `keyword_fallback` answers with highlighted snippets, so this
+            // response needs the markers as much as `/search/notes` does: one
+            // renderer, one contract, whichever engine ran.
+            'highlight' => [
+                'open' => SearchSnippet::HIGHLIGHT_OPEN,
+                'close' => SearchSnippet::HIGHLIGHT_CLOSE,
+            ],
         ]);
     }
 
