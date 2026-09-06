@@ -63,6 +63,9 @@ final class EntityLinkService
     /** A note about a client, not an import of the client list. */
     private const MAX_PER_NOTE = 200;
 
+    /** Room for an annotation, not for a copy of the record linked to. */
+    private const MAX_METADATA_BYTES = 8192;
+
     /** Metadata key the document sync owns. A request may not set it. */
     private const VIA_DOCUMENT = 'via_document';
 
@@ -125,11 +128,16 @@ final class EntityLinkService
 
         $entityType = self::entityType($input['entity_type'] ?? null);
         $entityId = self::entityId($input['entity_id'] ?? null);
+        // Absent and empty are different acts, exactly as they are for a
+        // meeting field: a client re-linking to refresh a stale label sends no
+        // `metadata` key, and that must not wipe what is stored against the
+        // link. `metadata: {}` still clears it, because that was asked for.
+        $sentMetadata = array_key_exists('metadata', $input);
         $metadata = self::metadata($input['metadata'] ?? null);
         $label = self::label($input['label'] ?? null) ?? $this->lookUpLabel($entityType, $entityId, $sesKey);
 
         return Connection::transaction(function () use (
-            $identity, $noteId, $entityType, $entityId, $label, $metadata
+            $identity, $noteId, $entityType, $entityId, $label, $metadata, $sentMetadata
         ): array {
             $existing = Connection::selectOne(
                 'SELECT id FROM note_entity_links
@@ -160,8 +168,10 @@ final class EntityLinkService
                     label = coalesce(EXCLUDED.label, note_entity_links.label),
                     -- A link the document wrote keeps its provenance: adding
                     -- the same one by hand must not make it deletable here
-                    -- while the mention is still in the note.
+                    -- while the mention is still in the note. And a request
+                    -- that said nothing about metadata changes none of it.
                     metadata = CASE WHEN note_entity_links.metadata->>'via_document' = 'true'
+                                         OR NOT :sent_metadata::boolean
                                     THEN note_entity_links.metadata
                                     ELSE EXCLUDED.metadata END",
                 [
@@ -170,7 +180,8 @@ final class EntityLinkService
                     'entity_type' => $entityType,
                     'entity_id' => $entityId,
                     'label' => $label,
-                    'metadata' => (string) json_encode($metadata, JSON_UNESCAPED_SLASHES),
+                    'metadata' => self::encodeMetadata($metadata),
+                    'sent_metadata' => $sentMetadata,
                     'created_by' => $identity->userId,
                 ],
             );
@@ -282,6 +293,27 @@ final class EntityLinkService
         }
 
         return $value;
+    }
+
+    /**
+     * Metadata, as the bytes that go into the column.
+     *
+     * Bounded like every other field here. A link is an annotation — "which
+     * invoice, in which currency" — not a place to park a copy of the record it
+     * points at, and 200 of them hang off one note.
+     *
+     * @param array<string, mixed> $metadata
+     */
+    private static function encodeMetadata(array $metadata): string
+    {
+        $encoded = json_encode($metadata, JSON_UNESCAPED_SLASHES);
+        if ($encoded === false || strlen($encoded) > self::MAX_METADATA_BYTES) {
+            throw ApiException::validation([
+                'metadata' => 'That is more metadata than a link can carry.',
+            ]);
+        }
+
+        return $encoded;
     }
 
     /**

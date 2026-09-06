@@ -67,6 +67,26 @@ final class MeetingService
         'summary_at' => ':summary_at::timestamptz',
     ];
 
+    /**
+     * The external ids one note may claim, and how a second claim is refused.
+     *
+     * These two columns are not decoration: an inbound recording is routed by
+     * `connect_meeting_id` and nothing else, so whichever note holds the id
+     * receives the transcript of that call. Letting two notes hold the same id
+     * would make the routing a race — and the note that wins is the one edited
+     * most recently, which anyone can arrange for themselves. So the id is
+     * claimed exclusively, on every path that writes it.
+     *
+     * column => [error code, message]
+     */
+    private const EXTERNAL_IDS = [
+        'calendar_event_id' => ['CALENDAR_EVENT_ALREADY_LINKED', 'Another note is already the record of this meeting.'],
+        'connect_meeting_id' => ['CONNECT_MEETING_ALREADY_LINKED', 'Another note is already the record of this call.'],
+    ];
+
+    /** Matches `note_meetings.calendar_event_id` / `connect_meeting_id`. */
+    private const MAX_EXTERNAL_ID_CHARS = 128;
+
     /** A meeting, not a conference: enough for a room and its apologies. */
     private const MAX_PARTICIPANTS = 200;
     private const MAX_LIST_ITEMS = 100;
@@ -119,9 +139,16 @@ final class MeetingService
             columns: self::NOTE_COLUMNS,
         );
 
-        return Connection::transaction(function () use ($noteId, $input): array {
+        return Connection::transaction(function () use ($identity, $noteId, $input): array {
             $existing = $this->row($noteId);
             $values = $this->changes($input, $existing);
+
+            // Inside the transaction, so the check and the claim are one act.
+            foreach (array_keys(self::EXTERNAL_IDS) as $column) {
+                if (($values[$column] ?? null) !== null) {
+                    $this->assertExternalIdAvailable($identity, $noteId, $column, (string) $values[$column]);
+                }
+            }
 
             if ($values === []) {
                 // Nothing recognised in the body. A no-op PATCH must not bring
@@ -176,6 +203,41 @@ final class MeetingService
         return $row === null ? null : (string) $row['note_id'];
     }
 
+    /**
+     * Refuse an external id that is already some other note's.
+     *
+     * The one guard behind every path that claims one — the hand-typed
+     * `PATCH /notes/{id}/meeting` as much as
+     * {@see \Aicountly\Api\Integrations\ConnectIntegrationService::linkMeeting()}
+     * — because a rule enforced only in the integration is not enforced at all:
+     * the endpoint is what a browser can reach.
+     *
+     * The other note's id is returned **only when the caller can already see
+     * that note**. "Another note has this" is a fact they need in order to act;
+     * which note it is, in someone else's account, is not.
+     */
+    public function assertExternalIdAvailable(
+        Identity $identity,
+        string $noteId,
+        string $column,
+        string $externalId,
+    ): void {
+        [$code, $message] = self::EXTERNAL_IDS[$column]
+            ?? throw new \InvalidArgumentException('Unknown external id column.');
+
+        $holder = $this->noteIdForExternalId($column, $externalId);
+        if ($holder === null || $holder === $noteId) {
+            return;
+        }
+
+        throw new ApiException(
+            409,
+            $code,
+            $message,
+            $this->permissions->roleFor($identity, $holder) === null ? [] : ['note_id' => $holder],
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Validation
     // -----------------------------------------------------------------------
@@ -204,9 +266,9 @@ final class MeetingService
         if (array_key_exists('location', $input)) {
             $values['location'] = self::text($input['location'], 300);
         }
-        foreach (['calendar_event_id', 'connect_meeting_id'] as $field) {
+        foreach (array_keys(self::EXTERNAL_IDS) as $field) {
             if (array_key_exists($field, $input)) {
-                $values[$field] = self::text($input[$field], 128);
+                $values[$field] = self::externalId($input[$field], $field);
             }
         }
 
@@ -411,6 +473,34 @@ final class MeetingService
         return $trimmed === '' ? null : Str::limit($trimmed, $max);
     }
 
+    /**
+     * An id belonging to Calendar or Connect.
+     *
+     * Refused when it is too long rather than trimmed to fit: a truncated id
+     * still points at *something*, and the something is another meeting. The
+     * same reasoning as {@see \Aicountly\Api\Domain\Links\EntityLinkService},
+     * and here it is load-bearing — a shortened id could be made to collide
+     * with an id another note already holds.
+     */
+    private static function externalId(mixed $value, string $field): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (!is_scalar($value)) {
+            throw ApiException::validation([$field => 'That id must be text.']);
+        }
+        $id = trim((string) $value);
+        if ($id === '') {
+            return null;
+        }
+        if (mb_strlen($id, 'UTF-8') > self::MAX_EXTERNAL_ID_CHARS) {
+            throw ApiException::validation([$field => 'That id is too long to be one of ours.']);
+        }
+
+        return $id;
+    }
+
     private static function email(mixed $value): ?string
     {
         $email = self::text($value, 320);
@@ -521,11 +611,11 @@ final class MeetingService
                 ? (string) $row['connect_meeting_id']
                 : null,
             'participants' => self::participantsOut(self::decodeList($row['participants'] ?? null)),
-            'agenda' => self::agenda(self::decodeList($row['agenda'] ?? null)),
+            'agenda' => self::agendaOut(self::decodeList($row['agenda'] ?? null)),
             // Normalised on the way out as well as in, because Pulse writes
             // this column too and a client should not have to handle two
             // shapes depending on who produced the minutes.
-            'decisions' => self::decisions(self::decodeList($row['decisions'] ?? null)),
+            'decisions' => self::decisionsOut(self::decodeList($row['decisions'] ?? null)),
             'summary' => isset($row['summary']) && $row['summary'] !== null ? (string) $row['summary'] : null,
             'summary_model' => isset($row['summary_model']) && $row['summary_model'] !== null
                 ? (string) $row['summary_model']
@@ -537,28 +627,108 @@ final class MeetingService
     }
 
     /**
+     * Rendering a stored row, which is not the same job as validating a request.
+     *
+     * Everything below reads with {@see softText}, which drops what it cannot
+     * render, rather than with {@see text}, which raises a 422. That difference
+     * is the whole point of these three methods existing separately from the
+     * validators above.
+     *
+     * `note_meetings.decisions` is written by Pulse as well as by this service
+     * — {@see \Aicountly\Api\Domain\Ai\NotesAIService} stores the model's own
+     * JSON — so a decision can arrive with an object where a string belongs.
+     * Validating that on the way *out* made the whole meeting unreadable: `GET`
+     * answered 422, and so did every `PATCH`, which left the note with no way
+     * to correct the row that caused it. A read is not the place to discover
+     * that something else wrote badly; it renders what it can and says nothing
+     * about the rest.
+     *
      * @param array<int, mixed> $participants
      * @return array<int, array<string, mixed>>
      */
     private static function participantsOut(array $participants): array
     {
         $out = [];
-        foreach ($participants as $participant) {
+        foreach (array_slice(array_values($participants), 0, self::MAX_PARTICIPANTS) as $participant) {
             if (!is_array($participant)) {
                 continue;
             }
-            $contactId = self::text($participant['contact_id'] ?? null, 128);
+            $contactId = self::softText($participant['contact_id'] ?? null, 128);
             $out[] = [
                 'contact_id' => $contactId,
-                'name' => self::text($participant['name'] ?? null, 200),
-                'email' => self::text($participant['email'] ?? null, 320),
-                'role' => self::text($participant['role'] ?? null, 60),
+                'name' => self::softText($participant['name'] ?? null, 200),
+                'email' => self::softText($participant['email'] ?? null, 320),
+                'role' => self::softText($participant['role'] ?? null, 60),
                 // The one thing a client must not infer from the name.
                 'is_linked' => $contactId !== null,
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * @param array<int, mixed> $items
+     * @return array<int, string>
+     */
+    private static function agendaOut(array $items): array
+    {
+        $out = [];
+        foreach (array_slice(array_values($items), 0, self::MAX_LIST_ITEMS) as $entry) {
+            $text = self::softItemText($entry);
+            if ($text !== null) {
+                $out[] = $text;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param array<int, mixed> $items
+     * @return array<int, array<string, mixed>>
+     */
+    private static function decisionsOut(array $items): array
+    {
+        $out = [];
+        foreach (array_slice(array_values($items), 0, self::MAX_LIST_ITEMS) as $entry) {
+            $text = self::softItemText($entry);
+            if ($text === null) {
+                continue;
+            }
+            $out[] = [
+                'text' => $text,
+                'decided_by' => is_array($entry)
+                    ? self::softText($entry['decided_by'] ?? $entry['owner'] ?? null, 200)
+                    : null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /** The renderable text of a stored list entry, or null. */
+    private static function softItemText(mixed $entry): ?string
+    {
+        if (is_array($entry)) {
+            return self::softText(
+                $entry['text'] ?? $entry['title'] ?? $entry['decision'] ?? null,
+                self::MAX_ITEM_CHARS,
+            );
+        }
+
+        return self::softText($entry, self::MAX_ITEM_CHARS);
+    }
+
+    /** {@see text}, but a value that cannot be rendered is dropped, not refused. */
+    private static function softText(mixed $value, int $max): ?string
+    {
+        if ($value === null || !is_scalar($value)) {
+            return null;
+        }
+        $trimmed = trim((string) $value);
+
+        return $trimmed === '' ? null : Str::limit($trimmed, $max);
     }
 
     /** @return array<int, mixed> */

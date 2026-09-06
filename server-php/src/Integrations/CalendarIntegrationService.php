@@ -70,17 +70,11 @@ final class CalendarIntegrationService
 
         $event = $this->event($sesKey, $eventId);
 
-        $alreadyOn = $this->meetings->noteIdForExternalId('calendar_event_id', $eventId);
-        if ($alreadyOn !== null && $alreadyOn !== $noteId) {
-            // Two sets of minutes for one meeting is nearly always a mistake,
-            // and the useful answer is where the first set is.
-            throw new ApiException(
-                409,
-                'CALENDAR_EVENT_ALREADY_LINKED',
-                'Another note is already the record of this meeting.',
-                ['note_id' => $alreadyOn],
-            );
-        }
+        // Two sets of minutes for one meeting is nearly always a mistake, and
+        // the useful answer is where the first set is — when the caller can see
+        // it. The rule itself lives in MeetingService, which is also where the
+        // hand-typed `PATCH /notes/{id}/meeting` goes through it.
+        $this->meetings->assertExternalIdAvailable($identity, $noteId, 'calendar_event_id', $eventId);
 
         return $this->meetings->upsert($identity, $noteId, $this->meetingFields($event) + [
             'calendar_event_id' => $eventId,

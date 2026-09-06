@@ -196,6 +196,57 @@ final class EntityLinksTest extends TestCase
         $this->assertNull($created['body']['data']['label']);
     }
 
+    /**
+     * Regression: a re-link that says nothing about metadata changes none.
+     *
+     * The label is explicitly protected from being replaced with nothing on a
+     * re-link; metadata was not, so refreshing a stale name silently emptied
+     * the annotation stored beside the link. Absent and empty are different
+     * acts here as everywhere else.
+     */
+    public function testRefreshingALinkKeepsTheMetadataItSaidNothingAbout(): void
+    {
+        $note = $this->note();
+        $this->alice->post('/notes/' . $note['id'] . '/entities', [
+            'entity_type' => 'invoice',
+            'entity_id' => 'INV-1',
+            'label' => 'April',
+            'metadata' => ['amount_currency' => 'INR'],
+        ]);
+
+        $refreshed = $this->alice->post('/notes/' . $note['id'] . '/entities', [
+            'entity_type' => 'invoice',
+            'entity_id' => 'INV-1',
+            'label' => 'April retainer',
+        ]);
+
+        $this->assertSame('April retainer', $refreshed['body']['data']['label']);
+        $this->assertSame('INR', $refreshed['body']['data']['metadata']['amount_currency'] ?? null);
+
+        // An empty object is a request to clear it, and is honoured.
+        $cleared = $this->alice->post('/notes/' . $note['id'] . '/entities', [
+            'entity_type' => 'invoice',
+            'entity_id' => 'INV-1',
+            'metadata' => [],
+        ]);
+        $this->assertSame([], $cleared['body']['data']['metadata']);
+    }
+
+    public function testMetadataIsBoundedLikeEveryOtherFieldHere(): void
+    {
+        $note = $this->note();
+
+        $refused = $this->alice->post('/notes/' . $note['id'] . '/entities', [
+            'entity_type' => 'invoice',
+            'entity_id' => 'INV-1',
+            // A link annotates; it is not somewhere to park the record itself.
+            'metadata' => ['blob' => str_repeat('x', 9000)],
+        ]);
+
+        $this->assertSame(422, $refused['status']);
+        $this->assertCount(0, Connection::select('SELECT id FROM note_entity_links'));
+    }
+
     // -- Links the document owns ---------------------------------------------
 
     public function testALinkWrittenByTheDocumentCannotBeDeletedThroughTheApi(): void

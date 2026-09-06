@@ -78,17 +78,12 @@ final class ConnectIntegrationService
 
         $meeting = $this->meeting($sesKey, $meetingId);
 
-        $alreadyOn = $this->meetings->noteIdForExternalId('connect_meeting_id', $meetingId);
-        if ($alreadyOn !== null && $alreadyOn !== $noteId) {
-            // The recording will be delivered once, to one note. Silently
-            // linking a second would leave a note that never receives one.
-            throw new ApiException(
-                409,
-                'CONNECT_MEETING_ALREADY_LINKED',
-                'Another note is already the record of this call.',
-                ['note_id' => $alreadyOn],
-            );
-        }
+        // The recording will be delivered once, to one note. Silently linking a
+        // second would leave a note that never receives one — and, worse, would
+        // make *which* note receives it a question of who edited last. The rule
+        // lives in MeetingService so the plain `PATCH /notes/{id}/meeting`
+        // cannot route around it.
+        $this->meetings->assertExternalIdAvailable($identity, $noteId, 'connect_meeting_id', $meetingId);
 
         $fields = ['connect_meeting_id' => $meetingId];
         foreach (['starts_at', 'ends_at'] as $field) {
