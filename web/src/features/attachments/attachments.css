@@ -229,3 +229,10 @@
 }
 
 .att-preview__fallback a { color: var(--notes-primary); }
+
+/* With motion switched off the slide never plays, and a bar parked off-screen
+   would read as "nothing is happening". A full, quiet bar is the honest
+   still-frame of an indeterminate one. */
+@media (prefers-reduced-motion: reduce) {
+  .att-progress__bar { width: 100%; }
+}

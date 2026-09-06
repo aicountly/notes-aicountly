@@ -72,6 +72,7 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
   const [driveBusy, setDriveBusy] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
   const driveFieldId = useId()
+  const headingId = useId()
 
   const canEdit = capabilities.edit
   const canRecord = isVoiceRecordingSupported()
@@ -91,6 +92,23 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
         error instanceof ApiError ? error.message : `${attachment.filename} could not be removed.`,
       )
     }
+  }
+
+  /**
+   * A capture dialog's upload.
+   *
+   * Failures are pulled back out of the tray and re-thrown, so the message
+   * lands in the dialog the user is looking at rather than on a row hidden
+   * behind it — and the recorder or scanner keeps what it captured.
+   */
+  const uploadFromDialog = async (files: File[]) => {
+    const outcome = await attachments.upload(files)
+
+    if (outcome.failed.length > 0) {
+      outcome.failed.forEach((row) => attachments.dismissPending(row.key))
+      throw new Error(outcome.failed.map((row) => row.message).join(' '))
+    }
+    close()
   }
 
   const attachDrive = async () => {
@@ -186,9 +204,9 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
   }
 
   return (
-    <section className="att-panel" aria-labelledby={`${driveFieldId}-heading`}>
+    <section className="att-panel" aria-labelledby={headingId}>
       <header className="att-panel__header">
-        <h2 className="att-panel__title" id={`${driveFieldId}-heading`}>
+        <h2 className="att-panel__title" id={headingId}>
           Attachments
           {attachments.attachments.length > 0 ? (
             <span className="att-panel__count"> ({attachments.attachments.length})</span>
@@ -269,13 +287,7 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
         {/* Mounted only while open, so the microphone is released the moment
             the dialog closes rather than when this panel unmounts. */}
         {dialog === 'voice' ? (
-          <VoiceRecorder
-            onCancel={close}
-            onSave={async (file) => {
-              await attachments.upload([file])
-              close()
-            }}
-          />
+          <VoiceRecorder onCancel={close} onSave={(file) => uploadFromDialog([file])} />
         ) : null}
       </Dialog>
 
@@ -287,13 +299,7 @@ export function AttachmentList({ noteId, capabilities }: AttachmentListProps) {
         width={720}
       >
         {dialog === 'scan' ? (
-          <DocumentScanner
-            onCancel={close}
-            onSave={async (files) => {
-              await attachments.upload(files)
-              close()
-            }}
-          />
+          <DocumentScanner onCancel={close} onSave={uploadFromDialog} />
         ) : null}
       </Dialog>
 

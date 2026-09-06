@@ -119,7 +119,7 @@ final class MeetingService
             columns: self::NOTE_COLUMNS,
         );
 
-        return Connection::transaction(function () use ($identity, $noteId, $input): array {
+        return Connection::transaction(function () use ($noteId, $input): array {
             $existing = $this->row($noteId);
             $values = $this->changes($input, $existing);
 
@@ -547,13 +547,14 @@ final class MeetingService
             if (!is_array($participant)) {
                 continue;
             }
+            $contactId = self::text($participant['contact_id'] ?? null, 128);
             $out[] = [
-                'contact_id' => self::text($participant['contact_id'] ?? null, 128),
+                'contact_id' => $contactId,
                 'name' => self::text($participant['name'] ?? null, 200),
                 'email' => self::text($participant['email'] ?? null, 320),
                 'role' => self::text($participant['role'] ?? null, 60),
                 // The one thing a client must not infer from the name.
-                'is_linked' => self::text($participant['contact_id'] ?? null, 128) !== null,
+                'is_linked' => $contactId !== null,
             ];
         }
 

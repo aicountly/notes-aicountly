@@ -129,9 +129,14 @@ final class AicountlyClient
         }
 
         if ($status === 401) {
-            // The other product rejected the session, not the request. Saying
-            // so lets the client re-authenticate instead of retrying forever.
-            throw ApiException::unauthenticated('Your session has expired. Sign in again.');
+            // The other product rejected the session, not the request. Named
+            // rather than reported as "your session has expired", because the
+            // Notes session plainly has not — this one call was refused, and a
+            // client told otherwise would sign the user out over it.
+            throw ApiException::unauthenticated(sprintf(
+                '%s did not accept your AICOUNTLY session.',
+                ucfirst($this->service),
+            ));
         }
 
         if ($status === 403 || $status === 404) {

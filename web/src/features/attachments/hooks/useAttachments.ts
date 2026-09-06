@@ -240,6 +240,18 @@ function newKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+/** A file the tray is still holding, and the sentence explaining why. */
+export interface UploadFailure {
+  key: string
+  filename: string
+  message: string
+}
+
+export interface UploadOutcome {
+  stored: Attachment[]
+  failed: UploadFailure[]
+}
+
 export interface UseAttachmentsResult {
   attachments: Attachment[]
   pending: PendingUpload[]
@@ -253,7 +265,7 @@ export interface UseAttachmentsResult {
   refetch: () => void
   /** Start watching again after {@link watchExpired}. */
   checkAgain: () => void
-  upload: (files: FileList | File[], options?: UploadOptions) => Promise<Attachment[]>
+  upload: (files: FileList | File[], options?: UploadOptions) => Promise<UploadOutcome>
   retryPending: (key: string) => void
   dismissPending: (key: string) => void
   attachDriveFile: (driveFileId: string, options?: UploadOptions) => Promise<Attachment>
@@ -334,8 +346,11 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
 
   /** Upload one queued row, leaving it in place with its message on failure. */
   const send = useCallback(
-    async (item: PendingUpload, options: UploadOptions): Promise<Attachment | null> => {
-      if (!noteId) return null
+    async (
+      item: PendingUpload,
+      options: UploadOptions,
+    ): Promise<{ ok: true; attachment: Attachment } | { ok: false; message: string }> => {
+      if (!noteId) return { ok: false, message: 'Open a note before attaching a file.' }
 
       setPending((current) =>
         current.map((row) => (row.key === item.key ? { ...row, uploading: true, error: null } : row)),
@@ -346,24 +361,21 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
         releasePreview(item.previewUrl)
         setPending((current) => current.filter((row) => row.key !== item.key))
         invalidate()
-        return attachment
+        return { ok: true, attachment }
       } catch (error) {
+        const message = describeUploadError(error, item.filename)
         setPending((current) =>
-          current.map((row) =>
-            row.key === item.key
-              ? { ...row, uploading: false, error: describeUploadError(error, item.filename) }
-              : row,
-          ),
+          current.map((row) => (row.key === item.key ? { ...row, uploading: false, error: message } : row)),
         )
-        return null
+        return { ok: false, message }
       }
     },
     [invalidate, noteId, releasePreview],
   )
 
   const upload = useCallback(
-    async (files: FileList | File[], options: UploadOptions = {}): Promise<Attachment[]> => {
-      if (!noteId) return []
+    async (files: FileList | File[], options: UploadOptions = {}): Promise<UploadOutcome> => {
+      if (!noteId) return { stored: [], failed: [] }
 
       const queued: PendingUpload[] = Array.from(files).map((file) => {
         const rejection = describeFileRejection(file, maxBytes)
@@ -390,13 +402,20 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
       // One at a time: uploads share a rate-limit bucket on the server, and a
       // burst of ten is how a drop of a folder turns into a 429.
       const stored: Attachment[] = []
+      const failed: UploadFailure[] = []
+
       for (const item of queued) {
-        if (item.error !== null) continue
-        const attachment = await send(item, options)
-        if (attachment) stored.push(attachment)
+        if (item.error !== null) {
+          failed.push({ key: item.key, filename: item.filename, message: item.error })
+          continue
+        }
+
+        const result = await send(item, options)
+        if (result.ok) stored.push(result.attachment)
+        else failed.push({ key: item.key, filename: item.filename, message: result.message })
       }
 
-      return stored
+      return { stored, failed }
     },
     [maxBytes, noteId, send],
   )
@@ -449,15 +468,20 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
     [invalidate, noteId],
   )
 
+  // `refetch` is stable across renders, so depending on it rather than on the
+  // whole query result keeps these callbacks stable too — a row does not
+  // re-render every poll just because its "Check again" handler was recreated.
+  const { refetch: refetchQuery } = list
+
   const checkAgain = useCallback(() => {
     pollStartedAt.current = Date.now()
     setWatchExpired(false)
-    void list.refetch()
-  }, [list])
+    void refetchQuery()
+  }, [refetchQuery])
 
   const refetch = useCallback(() => {
-    void list.refetch()
-  }, [list])
+    void refetchQuery()
+  }, [refetchQuery])
 
   return {
     attachments: rows,

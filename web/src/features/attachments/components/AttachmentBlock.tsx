@@ -250,7 +250,10 @@ export function AttachmentBlock({
       </div>
 
       {showImage ? (
-        <a className="att-preview att-preview--image" href={href} download={attachment.filename}>
+        <div className="att-preview att-preview--image">
+          {/* Not wrapped in a link: Download above already goes to the same
+              place, and a second link with the same name is noise in a screen
+              reader's list of links. */}
           <img
             src={href}
             alt={attachment.filename}
@@ -259,7 +262,7 @@ export function AttachmentBlock({
             width={attachment.width ?? undefined}
             height={attachment.height ?? undefined}
           />
-        </a>
+        </div>
       ) : null}
 
       {showPdf && previewOpen ? (
