@@ -139,6 +139,64 @@ function apply_cors(): void
     header('Vary: Origin');
 }
 
+/**
+ * Liveness, plus the few operational numbers worth having without a login.
+ *
+ * Deliberately contains no note content and no counts of anyone's notes — this
+ * endpoint is public. What it does report is whether the database answers and
+ * whether the background worker is running, because the failure mode those
+ * cause is silent: uploads keep succeeding and attachments simply never finish
+ * processing, which looks like nothing at all until someone asks why a scan has
+ * no text.
+ *
+ * @return array<string, mixed>
+ */
+function health_report(): array
+{
+    $report = [
+        'status' => 'ok',
+        'app' => 'Notes',
+        'env' => Env::get('APP_ENV', 'unknown'),
+        'time' => gmdate('c'),
+        'database' => 'unknown',
+    ];
+
+    try {
+        $row = Database\Connection::selectOne(
+            "SELECT
+                (SELECT count(*) FROM note_processing_jobs WHERE status = 'queued')     AS queued,
+                (SELECT count(*) FROM note_processing_jobs WHERE status = 'processing') AS processing,
+                (SELECT count(*) FROM note_processing_jobs
+                  WHERE status = 'failed' AND updated_at > now() - interval '24 hours') AS failed_24h,
+                (SELECT count(*) FROM note_processing_jobs
+                  WHERE status = 'queued' AND available_at < now() - interval '30 minutes') AS overdue,
+                (SELECT max(finished_at) FROM note_processing_jobs WHERE status = 'completed') AS last_completed",
+        );
+
+        $report['database'] = 'ok';
+        $report['jobs'] = [
+            'queued' => (int) ($row['queued'] ?? 0),
+            'processing' => (int) ($row['processing'] ?? 0),
+            'failed_24h' => (int) ($row['failed_24h'] ?? 0),
+            'last_completed_at' => $row['last_completed'] ?? null,
+        ];
+
+        // A job that has been due for half an hour means nothing is running the
+        // worker — the cron entry is the thing to check. See docs/DEPLOYMENT.md.
+        if ((int) ($row['overdue'] ?? 0) > 0) {
+            $report['status'] = 'degraded';
+            $report['worker'] = 'stalled';
+        }
+    } catch (\Throwable) {
+        // A health check must answer even when the thing it is checking is down;
+        // reporting "degraded" is the whole point of the endpoint.
+        $report['status'] = 'degraded';
+        $report['database'] = 'unavailable';
+    }
+
+    return $report;
+}
+
 /** Relay one allow-listed portal auth call. Never reaches the router. */
 function relay_to_portal(string $method, string $path): void
 {
@@ -208,12 +266,7 @@ if (preg_match('/^[A-Za-z0-9._-]{1,64}$/', $incomingRequestId) === 1) {
 }
 
 if ($path === '' || $path === 'health') {
-    Response::ok([
-        'status' => 'ok',
-        'app' => 'Notes',
-        'env' => Env::get('APP_ENV', 'unknown'),
-        'time' => gmdate('c'),
-    ])->send();
+    Response::ok(health_report())->send();
     exit;
 }
 

@@ -89,11 +89,66 @@ That is the whole file for a production deploy; `APP_ENV=sandbox` for the
 sandbox. `GET /api/health` reports the value back, which is how you confirm
 you are looking at the environment you think you are.
 
-The API has no database yet. When the product needs one, add the credentials to
-this same file — and note that cPanel prefixes both database and user with the
-account name, so a database entered as `app` becomes `<cpaneluser>_app`. Use the
-full prefixed names, add the user to the database with **ALL PRIVILEGES**, and
-set `DB_HOST=localhost` (on cPanel the database is on the same machine).
+The API needs a **PostgreSQL** database, so `api/.env` also carries the `DB_*`
+values. cPanel prefixes both database and user with the account name, so a
+database created as `notes` becomes `<cpaneluser>_notes`. Use the full prefixed
+names, add the user to the database with **ALL PRIVILEGES**, and set
+`DB_HOST=localhost` (on cPanel the database is on the same machine).
+
+`server-php/.env.example` is the full template, including the feature flags —
+all of which default to off.
+
+## Migrations
+
+There is no deploy hook on cPanel, so migrations are run by hand over SSH after
+a release that adds one:
+
+```bash
+cd <remote root>/api
+php bin/migrate.php status   # what is applied
+php bin/migrate.php up       # apply the rest
+php bin/migrate.php seed     # system templates; idempotent, no demo data
+```
+
+Both deploy workflows print this command in their summary as a reminder.
+
+`0008_pgvector` is marked optional. `CREATE EXTENSION vector` needs the
+extension present on the host and superuser rights, and shared cPanel usually
+has neither — so when it fails it is recorded as **skipped**, the rest of the
+schema is unaffected, and semantic search stays flagged off. Seeing
+
+```
+skipped        0008_pgvector  (extension "vector" is not available)
+```
+
+is a healthy result, not a failed deploy. See [DATABASE.md](DATABASE.md).
+
+## Background jobs
+
+Attachment processing, OCR, transcription, trash retention and rate-limit
+housekeeping run outside the request — an upload must not block on a thumbnail.
+cPanel has no queue daemon, so the worker is a CLI command run by cron
+(**cPanel → Cron Jobs**):
+
+```
+*/5 * * * * cd /home/<user>/public_html/api && php bin/worker.php --once >/dev/null 2>&1
+```
+
+Without it, uploads still succeed and notes still work — attachments simply stay
+in `processing_status: pending` and trashed notes are never swept. The API's
+`/api/health` reports queue depth so this is visible rather than silent.
+
+## Attachment storage
+
+When AICOUNTLY Drive is not configured, attachment bytes are written to
+`NOTES_STORAGE_PATH` (default `<remote root>/api/storage`). Two things matter:
+
+- The API deploy step excludes `storage/` from `--delete`, so a deploy cannot
+  erase uploaded files. **Do not remove that exclude.**
+- The directory sits inside the document root by default, so the API writes a
+  deny-all `.htaccess` into it on first use. Better still, point
+  `NOTES_STORAGE_PATH` at a directory *outside* the document root, e.g.
+  `/home/<user>/notes-storage`.
 
 ### Protecting the API's .env over HTTP
 
