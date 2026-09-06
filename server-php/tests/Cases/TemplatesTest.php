@@ -457,20 +457,25 @@ final class TemplatesTest extends TestCase
     public function testTheRequestMayOverrideWhatTheTemplateSuggests(): void
     {
         $this->seed();
+        Clock::freeze(1788733800); // 2026-09-06 22:30 UTC
         $notebook = $this->alice->post('/notebooks', ['name' => 'Clients'])['body']['data'];
         $daily = $this->byKey($this->alice, 'daily-note');
 
         $note = $this->alice->post('/templates/' . $daily['id'] . '/create-note', [
-            'title' => 'Standup',
+            'title' => 'Standup {{date}}',
             'notebook_id' => $notebook['id'],
             'tags' => ['standup'],
         ])['body']['data'];
 
-        $this->assertSame('Standup', $note['title']);
+        // A title the request supplies gets the same tokens as the template's
+        // own, so a "name this note" dialog can offer {{date}} and mean it.
+        $this->assertSame('Standup 2026-09-06', $note['title']);
         $this->assertSame($notebook['id'], $note['notebook_id']);
         // An explicit list replaces the template's defaults rather than adding
         // to them, so "create it with exactly these tags" means what it says.
         $this->assertSame(['standup'], array_map(static fn (array $t): string => $t['slug'], $note['tags']));
+
+        Clock::freeze(null);
     }
 
     // -- Editing and deleting your own --------------------------------------

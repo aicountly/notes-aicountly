@@ -1,0 +1,244 @@
+/* ---------------------------------------------------------------------------
+ * The organising structures in the sidebar: notebooks, smart folders, tags.
+ *
+ * Shared here because the three sections are the same object at different
+ * zoom levels — a row, a count, a "…" menu — and three copies of that would
+ * drift into three slightly different rows. Feature-specific shapes (tree
+ * indentation, tag chips, the rule builder) live in each feature's own file.
+ *
+ * Every value is a token from styles/tokens.css.
+ * ------------------------------------------------------------------------- */
+
+/* --- Section -------------------------------------------------------------- */
+
+.org-section__actions { display: inline-flex; align-items: center; gap: 2px; }
+
+/* A section's loading state is shaped like its rows, not like a spinner. */
+.org-skeletons { display: flex; flex-direction: column; gap: var(--notes-space-2); padding: var(--notes-space-1) var(--notes-space-3); }
+.org-skeleton-row { display: flex; align-items: center; gap: var(--notes-space-3); }
+
+.org-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-danger-soft);
+  color: var(--notes-danger);
+  font-size: var(--notes-text-sm);
+}
+.org-notice--offline { background: var(--notes-warning-soft); color: var(--notes-warning); }
+.org-notice--info { background: var(--notes-info-soft); color: var(--notes-info); }
+.org-notice__icon { flex-shrink: 0; margin-top: 2px; }
+.org-notice__body { flex: 1; min-width: 0; }
+.org-notice__actions { margin-top: var(--notes-space-2); display: flex; gap: var(--notes-space-2); }
+
+.org-hint { margin: 0; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+/* --- Row ------------------------------------------------------------------ */
+
+/* The link fills the row and the menu sits on top of it, so the whole row is
+   one click target without nesting a button inside an anchor. */
+.org-row { position: relative; display: flex; align-items: center; }
+.org-row > .nav-item { padding-right: 30px; }
+
+.org-row__menu {
+  position: absolute;
+  right: var(--notes-space-1);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* A dot, not a background wash: the row already uses tint for "active". */
+.org-dot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--notes-radius-pill);
+  background: var(--note-default);
+  border: 1px solid var(--note-default-border);
+}
+.org-dot--coral { background: var(--note-coral); border-color: var(--note-coral-border); }
+.org-dot--peach { background: var(--note-peach); border-color: var(--note-peach-border); }
+.org-dot--sand { background: var(--note-sand); border-color: var(--note-sand-border); }
+.org-dot--sage { background: var(--note-sage); border-color: var(--note-sage-border); }
+.org-dot--mint { background: var(--note-mint); border-color: var(--note-mint-border); }
+.org-dot--sky { background: var(--note-sky); border-color: var(--note-sky-border); }
+.org-dot--lavender { background: var(--note-lavender); border-color: var(--note-lavender-border); }
+.org-dot--blush { background: var(--note-blush); border-color: var(--note-blush-border); }
+.org-dot--graphite { background: var(--note-graphite); border-color: var(--note-graphite-border); }
+
+/* --- The "…" menu --------------------------------------------------------- */
+
+.org-menu { position: relative; display: inline-flex; }
+
+.org-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--notes-duration-fast) var(--notes-ease);
+}
+/* Hidden until wanted, but never hidden from the keyboard. */
+.org-row:hover .org-menu__trigger,
+.org-row:focus-within .org-menu__trigger,
+.org-menu__trigger:focus-visible,
+.org-menu__trigger[aria-expanded='true'] { opacity: 1; }
+.org-menu__trigger:hover { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+
+@media (hover: none) {
+  /* Nothing hovers on a touch screen, so the menu is always visible there. */
+  .org-menu__trigger { opacity: 1; }
+}
+
+.org-menu__popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--notes-z-dropdown);
+  min-width: 210px;
+  padding: var(--notes-space-1);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-raised);
+  box-shadow: var(--notes-shadow-lg);
+}
+.org-menu__popup--above { top: auto; bottom: calc(100% + 4px); }
+
+.org-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  width: 100%;
+  padding: 6px var(--notes-space-2);
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.org-menu__item:hover { background: var(--notes-surface-hover); }
+.org-menu__item--danger { color: var(--notes-danger); }
+.org-menu__item--danger:hover { background: var(--notes-danger-soft); }
+.org-menu__item[aria-disabled='true'] { color: var(--notes-text-tertiary); cursor: not-allowed; }
+.org-menu__item[aria-disabled='true']:hover { background: transparent; }
+.org-menu__label { flex: 1; min-width: 0; }
+.org-menu__reason { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+.org-menu__separator { margin: var(--notes-space-1) 0; border: 0; border-top: 1px solid var(--notes-border); }
+.org-menu__status { margin: var(--notes-space-1) 0 0; padding: 0 var(--notes-space-2); font-size: var(--notes-text-xs); color: var(--notes-danger); }
+
+/* --- Forms inside the dialogs -------------------------------------------- */
+
+.org-form { display: flex; flex-direction: column; gap: var(--notes-space-4); }
+.org-field { display: flex; flex-direction: column; gap: var(--notes-space-1); }
+
+.org-label { font-size: var(--notes-text-sm); font-weight: 600; color: var(--notes-text-secondary); }
+
+.org-input,
+.org-textarea,
+.org-select {
+  width: 100%;
+  padding: 7px var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-base);
+}
+.org-textarea { min-height: 72px; resize: vertical; line-height: 1.5; }
+.org-input[aria-invalid='true'],
+.org-select[aria-invalid='true'] { border-color: var(--notes-danger); }
+.org-input:disabled,
+.org-textarea:disabled,
+.org-select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.org-error { margin: 0; font-size: var(--notes-text-xs); color: var(--notes-danger); }
+
+/* --- Swatch and icon pickers --------------------------------------------- */
+
+.org-swatches { display: flex; flex-wrap: wrap; gap: var(--notes-space-2); }
+
+.org-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--note-default-border);
+  border-radius: var(--notes-radius-pill);
+  background: var(--note-default);
+  color: var(--notes-text-secondary);
+  cursor: pointer;
+}
+/* Selection is a tick as well as a ring — hue alone is not a signal. */
+.org-swatch[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--notes-focus-ring); }
+.org-swatch--coral { background: var(--note-coral); border-color: var(--note-coral-border); }
+.org-swatch--peach { background: var(--note-peach); border-color: var(--note-peach-border); }
+.org-swatch--sand { background: var(--note-sand); border-color: var(--note-sand-border); }
+.org-swatch--sage { background: var(--note-sage); border-color: var(--note-sage-border); }
+.org-swatch--mint { background: var(--note-mint); border-color: var(--note-mint-border); }
+.org-swatch--sky { background: var(--note-sky); border-color: var(--note-sky-border); }
+.org-swatch--lavender { background: var(--note-lavender); border-color: var(--note-lavender-border); }
+.org-swatch--blush { background: var(--note-blush); border-color: var(--note-blush-border); }
+.org-swatch--graphite { background: var(--note-graphite); border-color: var(--note-graphite-border); }
+
+.org-icons { display: flex; flex-wrap: wrap; gap: var(--notes-space-2); }
+
+.org-icon-option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-secondary);
+  cursor: pointer;
+}
+.org-icon-option:hover { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+.org-icon-option[aria-pressed='true'] {
+  background: var(--notes-primary-soft);
+  border-color: var(--notes-primary-border);
+  color: var(--notes-primary-active);
+}
+
+/* --- Pickable lists inside dialogs --------------------------------------- */
+
+.org-picker { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; max-height: 320px; overflow-y: auto; }
+
+.org-picker__option {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  width: 100%;
+  padding: 7px var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-sm);
+  background: transparent;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.org-picker__option:hover { background: var(--notes-surface-hover); }
+.org-picker__option[aria-pressed='true'] { background: var(--notes-primary-soft); font-weight: 600; }
+.org-picker__option[aria-disabled='true'] { color: var(--notes-text-tertiary); cursor: not-allowed; }
+.org-picker__option[aria-disabled='true']:hover { background: transparent; }
+.org-picker__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-picker__note { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+.org-empty { margin: 0; font-size: var(--notes-text-sm); color: var(--notes-text-tertiary); }

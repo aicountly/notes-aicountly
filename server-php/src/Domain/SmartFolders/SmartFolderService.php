@@ -9,6 +9,7 @@ use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Collaboration\NoteAccess;
 use Aicountly\Api\Domain\Notes\NoteQuery;
 use Aicountly\Api\Domain\Notes\NoteRepository;
+use Aicountly\Api\Features;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Support\Str;
 use Aicountly\Api\Support\Uuid;
@@ -55,11 +56,14 @@ final class SmartFolderService
     private const MAX_FOLDERS = 50;
 
     /**
-     * The ceiling on a folder's live match count.
+     * The default ceiling on a folder's live match count.
+     *
+     * Overridable with `NOTES_SMART_FOLDER_COUNT_CAP`, because how much a scan
+     * costs depends on the size of the library it runs over.
      *
      * @see self::countFor()
      */
-    private const COUNT_CAP = 500;
+    private const DEFAULT_COUNT_CAP = 500;
 
     private const MAX_NAME = 200;
     private const MAX_ICON = 60;
@@ -385,7 +389,7 @@ final class SmartFolderService
      * as "updated in the last year" matches most of a library — so the cost of
      * the badge grows with the number of notes a user has, which is precisely
      * the user whose sidebar must not get slower. The scan therefore stops at
-     * {@see self::COUNT_CAP} and reports that it did, so the client renders
+     * {@see self::countCap()} and reports that it did, so the client renders
      * "500+" rather than paying for a digit nobody reads. The folder itself
      * still lists every match, page by page.
      *
@@ -407,6 +411,8 @@ final class SmartFolderService
             ? 'n.deleted_at IS NULL'
             : 'n.deleted_at IS NULL AND NOT n.is_archived';
 
+        $cap = $this->countCap();
+
         $row = Connection::selectOne(
             'WITH RECURSIVE ' . NoteAccess::cte() . ',
              matches AS (
@@ -420,13 +426,18 @@ final class SmartFolderService
             [
                 'auth_user' => $identity->userId,
                 'auth_tenant' => $identity->tenantId,
-                'count_cap' => self::COUNT_CAP,
+                'count_cap' => $cap,
             ] + $query->bindings(),
         );
 
         $count = (int) ($row['matches'] ?? 0);
 
-        return ['count' => $count, 'capped' => $count >= self::COUNT_CAP, 'valid' => true];
+        return ['count' => $count, 'capped' => $count >= $cap, 'valid' => true];
+    }
+
+    private function countCap(): int
+    {
+        return Features::int('NOTES_SMART_FOLDER_COUNT_CAP', self::DEFAULT_COUNT_CAP, 1, 10000);
     }
 
     // -----------------------------------------------------------------------

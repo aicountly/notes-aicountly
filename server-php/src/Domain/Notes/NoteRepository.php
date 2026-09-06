@@ -7,6 +7,7 @@ namespace Aicountly\Api\Domain\Notes;
 use Aicountly\Api\Auth\Identity;
 use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Collaboration\NoteAccess;
+use Aicountly\Api\Support\Uuid;
 
 /**
  * Reads over the notes table.
@@ -226,18 +227,53 @@ final class NoteRepository
         };
     }
 
-    /** @return array{ts: string, id: string}|null */
+    /**
+     * @return array{ts: string, id: string}|null Null for anything unusable.
+     *
+     * A cursor is opaque to the client but arrives from it, so both halves are
+     * validated before they reach the query. Binding alone is not enough: the
+     * placeholders are cast to `timestamptz` and `uuid`, and Postgres answers a
+     * value that is not one of those with an error, not an empty result — so an
+     * edited cursor would 500 rather than simply being ignored.
+     *
+     * An unusable cursor is treated as no cursor: the reader gets the first
+     * page instead of an error page.
+     */
     private function decodeCursor(string $cursor): ?array
     {
         if ($cursor === '') {
             return null;
         }
-        $decoded = json_decode((string) base64_decode(strtr($cursor, '-_', '+/'), true), true);
+
+        $raw = base64_decode(strtr($cursor, '-_', '+/'), true);
+        if ($raw === false) {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
         if (!is_array($decoded) || !isset($decoded['ts'], $decoded['id'])) {
             return null;
         }
 
-        return ['ts' => (string) $decoded['ts'], 'id' => (string) $decoded['id']];
+        $timestamp = is_scalar($decoded['ts']) ? (string) $decoded['ts'] : '';
+        $id = is_scalar($decoded['id']) ? (string) $decoded['id'] : '';
+
+        if (!Uuid::isValid($id)) {
+            return null;
+        }
+
+        try {
+            $parsed = new \DateTimeImmutable($timestamp);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return [
+            // Re-formatted from the parsed value rather than passed through, so
+            // only a canonical timestamp ever reaches the query.
+            'ts' => $parsed->format(\DateTimeInterface::RFC3339_EXTENDED),
+            'id' => strtolower($id),
+        ];
     }
 
     private function encodeCursor(string $timestamp, string $id): string

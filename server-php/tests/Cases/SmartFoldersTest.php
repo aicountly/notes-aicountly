@@ -92,6 +92,34 @@ final class SmartFoldersTest extends TestCase
         $this->assertSame(1, $listed['body']['data'][0]['note_count']);
     }
 
+    /**
+     * The badge is bounded, and says when it is.
+     *
+     * The cap is configuration precisely so it can be exercised: at its default
+     * of 500 this test would have to write 500 notes to prove the scan stops,
+     * which is the cost the cap exists to avoid.
+     */
+    public function testTheMatchCountStopsAtTheCap(): void
+    {
+        putenv('NOTES_SMART_FOLDER_COUNT_CAP=2');
+
+        try {
+            foreach (['one', 'two', 'three'] as $title) {
+                $this->note($this->alice, $title, ['tags' => ['gst']]);
+            }
+            $this->folder($this->alice, 'GST', [['field' => 'tag', 'operator' => 'is', 'value' => 'gst']]);
+
+            $folder = $this->alice->get('/smart-folders')['body']['data'][0];
+            $this->assertSame(2, $folder['note_count']);
+            $this->assertTrue($folder['note_count_is_capped'], 'the client needs to know to render "2+"');
+
+            // The folder itself is not capped — only the badge is.
+            $this->assertCount(3, $this->titles($this->alice, $folder['id']));
+        } finally {
+            putenv('NOTES_SMART_FOLDER_COUNT_CAP');
+        }
+    }
+
     public function testANamelessFolderIsRefused(): void
     {
         $result = $this->alice->post('/smart-folders', ['name' => '   ']);
@@ -162,6 +190,46 @@ final class SmartFoldersTest extends TestCase
         // The default list hides archived notes, so a folder that asks for them
         // has to widen the scope itself or it is permanently empty.
         $this->assertSame(['last year'], $this->titles($this->alice, $folder['id']));
+        $this->assertSame(1, $this->alice->get('/smart-folders')['body']['data'][0]['note_count']);
+    }
+
+    public function testATrashedNoteLeavesEveryFolder(): void
+    {
+        $note = $this->note($this->alice, 'quarterly return', ['tags' => ['gst']]);
+        $folder = $this->folder($this->alice, 'GST', [['field' => 'tag', 'operator' => 'is', 'value' => 'gst']]);
+
+        $this->alice->delete('/notes/' . $note['id']);
+
+        // Not even the widest scope reaches Trash: a folder is a view over the
+        // library, and Trash is the place things go to stop being in it.
+        $this->assertCount(0, $this->titles($this->alice, $folder['id']));
+        $this->assertCount(0, $this->titles($this->alice, $folder['id'], ['scope' => 'all']));
+        $this->assertSame(0, $this->alice->get('/smart-folders')['body']['data'][0]['note_count']);
+
+        $this->alice->post('/notes/' . $note['id'] . '/restore');
+        $this->assertCount(1, $this->titles($this->alice, $folder['id']));
+    }
+
+    public function testTheWholeFilterVocabularyComposes(): void
+    {
+        $this->note($this->alice, 'gst invoice queries for the client', [
+            'title' => 'Invoice queries',
+            'tags' => ['gst'],
+            'note_type' => 'document',
+        ]);
+        $this->note($this->alice, 'gst something else entirely', ['title' => 'Other', 'tags' => ['gst']]);
+
+        // Text, tag, type and a date window in one rule tree — the count query
+        // and the list query build the same clauses, so both are exercised here.
+        $folder = $this->folder($this->alice, 'Recent invoice queries', [
+            ['field' => 'text', 'operator' => 'contains', 'value' => 'invoice queries'],
+            ['field' => 'tag', 'operator' => 'is', 'value' => 'gst'],
+            ['field' => 'note_type', 'operator' => 'is', 'value' => 'document'],
+            ['field' => 'has_attachment', 'operator' => 'is', 'value' => false],
+            ['field' => 'updated_at', 'operator' => 'within_days', 'value' => 7],
+        ]);
+
+        $this->assertSame(['Invoice queries'], $this->titles($this->alice, $folder['id']));
         $this->assertSame(1, $this->alice->get('/smart-folders')['body']['data'][0]['note_count']);
     }
 
@@ -305,6 +373,28 @@ final class SmartFoldersTest extends TestCase
             $this->alice->get('/smart-folders')['body']['data'],
         );
         $this->assertSame([$second['id'], $third['id'], $first['id']], $order);
+    }
+
+    /**
+     * The other half of the bound on `GET /smart-folders`.
+     *
+     * That endpoint costs one capped count per folder, so the number of folders
+     * is what decides the size of the page — hence a ceiling, and a delete that
+     * genuinely makes room.
+     */
+    public function testThereIsACeilingOnHowManyFoldersOnePersonKeeps(): void
+    {
+        $ids = [];
+        for ($i = 0; $i < 50; $i++) {
+            $ids[] = $this->folder($this->alice, 'Folder ' . $i, [])['id'];
+        }
+
+        $refused = $this->alice->post('/smart-folders', ['name' => 'One too many']);
+        $this->assertSame(409, $refused['status']);
+        $this->assertSame('SMART_FOLDER_LIMIT', $refused['body']['error']['code']);
+
+        $this->alice->delete('/smart-folders/' . $ids[0]);
+        $this->assertSame(201, $this->alice->post('/smart-folders', ['name' => 'Room again'])['status']);
     }
 
     public function testDeletingAFolderRemovesItFromTheList(): void

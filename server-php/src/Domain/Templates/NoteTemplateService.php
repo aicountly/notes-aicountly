@@ -290,7 +290,9 @@ final class NoteTemplateService
      * it gets the same sanitisation, the same first revision, the same derived
      * links and checklist actions, and the same activity entry.
      *
-     * The request may override `title`, `notebook_id` and `tags`; an explicit
+     * The request may override `title`, `notebook_id` and `tags`. An overriding
+     * title goes through the same token substitution as the template's own, so
+     * a "name this note" dialog can offer `{{date}}` and mean it. An explicit
      * `tags` list replaces the template's defaults rather than adding to them,
      * because "create it with exactly these tags" is the only version of that
      * instruction a UI can express unambiguously.
@@ -306,9 +308,10 @@ final class NoteTemplateService
             ? $this->tagSlugs($input['tags'])
             : self::decodeTags($template['default_tags'] ?? null);
 
-        $title = array_key_exists('title', $input)
-            ? $input['title']
-            : $this->renderTitle($template['title_template'] ?? null, $input['timezone'] ?? null);
+        $title = $this->renderTitle(
+            array_key_exists('title', $input) ? $input['title'] : ($template['title_template'] ?? null),
+            $input['timezone'] ?? null,
+        );
 
         return $this->notes->create($identity, [
             'id' => $input['id'] ?? null,
@@ -323,7 +326,8 @@ final class NoteTemplateService
     }
 
     /**
-     * Substitute the tokens a `title_template` may contain.
+     * Substitute the tokens a `title_template` — or a title the request sends
+     * in its place — may contain.
      *
      * There are exactly two, and this is the whole list:
      *
