@@ -8,20 +8,30 @@ declare(strict_types=1);
  * Deployed to <document root>/api, so it is same-origin with the React app on
  * both notes.aicountly.com and notes.gh.aicountly.com.
  *
- * Routes:
- *   GET  /api/health          liveness + which environment answered
- *   POST /api/global/{path}   allow-listed relay to the portal auth API
- *   GET  /api/session         who the caller is, per the portal
+ * Three kinds of route live here:
  *
- * There is deliberately nothing else here yet.
+ *   GET  /api/health          liveness + which environment answered  (public)
+ *   GET  /api/config          feature flags and limits               (public)
+ *   POST /api/global/{path}   allow-listed relay to the portal auth API
+ *   *    /api/…               the product API, behind a Bearer ses_key
+ *
+ * The product API is declared in src/Routes.php; everything below is the
+ * plumbing that gets a request to it and an answer back.
  */
 
 namespace Aicountly\Api;
 
-require __DIR__ . '/src/Env.php';
-require __DIR__ . '/src/Portal.php';
+require __DIR__ . '/src/Autoloader.php';
 
+Autoloader::register(__DIR__ . '/src');
 Env::load(__DIR__ . '/.env');
+
+use Aicountly\Api\Auth\SessionGuard;
+use Aicountly\Api\Http\ApiException;
+use Aicountly\Api\Http\Request;
+use Aicountly\Api\Http\Response;
+use Aicountly\Api\Http\Router;
+use Aicountly\Api\Support\Logger;
 
 /**
  * Portal paths this API relays for the browser.
@@ -44,18 +54,6 @@ const RELAYED_PATHS = [
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * @param array<string, mixed> $payload
- */
-function send_json(int $status, array $payload): void
-{
-    http_response_code($status);
-    header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store');
-    echo json_encode($payload, JSON_UNESCAPED_SLASHES);
-    exit;
-}
 
 /**
  * The Authorization header, wherever this server happens to expose it.
@@ -134,14 +132,52 @@ function apply_cors(): void
     }
 
     header('Access-Control-Allow-Origin: ' . $origin);
-    header('Access-Control-Allow-Headers: Authorization, Content-Type');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: Authorization, Content-Type, X-Request-Id, If-Match');
+    header('Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS');
+    header('Access-Control-Expose-Headers: X-Request-Id');
     header('Access-Control-Max-Age: 600');
     header('Vary: Origin');
 }
 
+/** Relay one allow-listed portal auth call. Never reaches the router. */
+function relay_to_portal(string $method, string $path): void
+{
+    $portalPath = substr($path, strlen('global/'));
+
+    if (!in_array($portalPath, RELAYED_PATHS, true)) {
+        Response::error(ApiException::notFound('That path'))->send();
+        exit;
+    }
+
+    $headers = [];
+    $authorization = authorization_header();
+    if ($authorization !== '') {
+        $headers[] = 'Authorization: ' . $authorization;
+    }
+    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+    if (is_string($contentType) && $contentType !== '') {
+        $headers[] = 'Content-Type: ' . $contentType;
+    }
+
+    $body = (string) file_get_contents('php://input');
+    $result = Portal::forward($method, $portalPath, $headers, $body);
+
+    if ($result['status'] === 504) {
+        Response::error(ApiException::upstream('portal', 'Auth service unavailable — please retry.'))->send();
+        exit;
+    }
+
+    // The portal's own body is passed through untouched: the SPA's auth code
+    // reads the portal's shape here, not this API's envelope.
+    http_response_code($result['status']);
+    header('Content-Type: ' . $result['contentType']);
+    header('Cache-Control: no-store');
+    echo $result['body'];
+    exit;
+}
+
 // ---------------------------------------------------------------------------
-// Routing
+// Dispatch
 // ---------------------------------------------------------------------------
 
 apply_cors();
@@ -164,61 +200,92 @@ if ($mountPoint !== '' && $mountPoint !== '/' && strpos($uri, $mountPoint) === 0
 
 $path = normalise_path($uri);
 
+// A client-supplied request id makes one user's report traceable across the
+// SPA and the server log. It is echoed back, never trusted for anything else.
+$incomingRequestId = (string) ($_SERVER['HTTP_X_REQUEST_ID'] ?? '');
+if (preg_match('/^[A-Za-z0-9._-]{1,64}$/', $incomingRequestId) === 1) {
+    Logger::setRequestId($incomingRequestId);
+}
+
 if ($path === '' || $path === 'health') {
-    send_json(200, [
+    Response::ok([
         'status' => 'ok',
         'app' => 'Notes',
         'env' => Env::get('APP_ENV', 'unknown'),
         'time' => gmdate('c'),
-    ]);
-}
-
-if (strpos($path, 'global/') === 0) {
-    $portalPath = substr($path, strlen('global/'));
-
-    if (!in_array($portalPath, RELAYED_PATHS, true)) {
-        send_json(404, ['message' => 'This path is not relayed. Call the portal API directly.']);
-    }
-
-    $headers = [];
-    $authorization = authorization_header();
-    if ($authorization !== '') {
-        $headers[] = 'Authorization: ' . $authorization;
-    }
-    $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
-    if (is_string($contentType) && $contentType !== '') {
-        $headers[] = 'Content-Type: ' . $contentType;
-    }
-
-    $body = (string) file_get_contents('php://input');
-    $result = Portal::forward($method, $portalPath, $headers, $body);
-
-    if ($result['status'] === 504) {
-        send_json(504, ['message' => 'Auth service unavailable — please retry.']);
-    }
-
-    http_response_code($result['status']);
-    header('Content-Type: ' . $result['contentType']);
-    header('Cache-Control: no-store');
-    echo $result['body'];
+    ])->send();
     exit;
 }
 
-if ($path === 'session') {
-    $sesKey = bearer_token();
-    if ($sesKey === '') {
-        send_json(401, ['message' => 'Missing bearer session key.']);
-    }
-
-    $session = Portal::validateSesKey($sesKey);
-    if ($session === null) {
-        send_json(401, ['message' => 'Invalid or expired session.']);
-    }
-
-    send_json(200, [
-        'authenticated' => true,
-        'uuid' => $session['uuid_aictly'] ?? ($session['uuid'] ?? ''),
-    ]);
+if ($path === 'config') {
+    Routes::publicConfig()->send();
+    exit;
 }
 
-send_json(404, ['message' => 'Not found.']);
+if (strpos($path, 'global/') === 0) {
+    relay_to_portal($method, $path);
+}
+
+// `/session` predates the product API and keeps its original shape, because the
+// SPA's auth bootstrap already reads it. Everything after this point is the
+// product API and uses the {success, data} envelope.
+if ($path === 'session') {
+    try {
+        $identity = SessionGuard::authenticate(bearer_token());
+        Response::ok([
+            'authenticated' => true,
+            'uuid' => $identity->userId,
+            'tenant_id' => $identity->tenantId,
+            'display_name' => $identity->displayName,
+            'email' => $identity->email,
+        ])->send();
+    } catch (ApiException $e) {
+        Response::error($e)->send();
+    }
+    exit;
+}
+
+$router = new Router();
+Routes::register($router);
+
+try {
+    $matched = $router->match($method, $path);
+    if ($matched === null) {
+        throw ApiException::notFound('That endpoint');
+    }
+
+    $request = Request::fromGlobals($path, $method, bearer_token());
+    $request->routeParams = $matched['params'];
+
+    $identity = $matched['auth']
+        ? SessionGuard::authenticate($request->bearerToken)
+        : new Auth\Identity('');
+
+    /** @var Response $response */
+    $response = ($matched['handler'])($request, $identity);
+    $response->send();
+} catch (ApiException $e) {
+    Response::error($e)->send();
+} catch (\Throwable $e) {
+    // The only place an unexpected throwable is turned into a response. The
+    // message and stack trace stay in the log: a production client gets a code
+    // and a request id to quote, never the internals of a failed query.
+    Logger::error('request.unhandled', [
+        'exception' => get_debug_type($e),
+        'message' => $e->getMessage(),
+        'file' => $e->getFile(),
+        'line' => $e->getLine(),
+        'path' => $path,
+        'method' => $method,
+    ]);
+
+    $debug = Env::get('APP_DEBUG') === 'true' && Env::get('APP_ENV') !== 'production';
+    Response::error(new ApiException(
+        500,
+        'INTERNAL_ERROR',
+        $debug
+            ? get_debug_type($e) . ': ' . $e->getMessage()
+            : 'Something went wrong on our side. Please try again.',
+        $debug ? ['file' => $e->getFile(), 'line' => $e->getLine()] : [],
+    ))->send();
+}
