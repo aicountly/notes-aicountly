@@ -32,7 +32,16 @@ export interface SyncConflict {
   localPayload: Record<string, unknown>
 }
 
-/** Give up on an operation the server keeps rejecting, rather than looping forever. */
+/**
+ * How many times a change is retried before it is set aside.
+ *
+ * Set aside, not thrown away. Deleting it was worse than the problem it
+ * solved: the status line says the change is "still on this device", and after
+ * the fifth failure that was a lie — the operation was gone and the note was
+ * left dirty for ever, so nothing would ever retry or surface it. A set-aside
+ * operation stays in the queue, is stepped over so it cannot block the ones
+ * behind it, and is reported.
+ */
 const MAX_ATTEMPTS = 5
 
 type Listener = (status: SyncStatus) => void
@@ -70,58 +79,70 @@ export function dismissConflict(noteId: string): void {
   })
 }
 
-/** Endpoint for one queued operation. */
-function endpointFor(operation: SyncOperation): { method: 'POST' | 'PATCH' | 'DELETE'; path: string } {
-  const id = operation.entity_id
-
-  switch (operation.operation) {
-    case 'note.create':
-      return { method: 'POST', path: '/notes' }
-    case 'note.update':
-      return { method: 'PATCH', path: `/notes/${id}` }
-    case 'note.trash':
-      // Soft delete. DELETE without ?permanent is what moves a note to Trash;
-      // the permanent form is never queued, because a destructive action taken
-      // offline and applied minutes later is not one the user can take back.
-      return { method: 'DELETE', path: `/notes/${id}` }
-    case 'note.restore':
-      return { method: 'POST', path: `/notes/${id}/restore` }
-    case 'note.archive':
-      return { method: 'POST', path: `/notes/${id}/archive` }
-    case 'note.unarchive':
-      return { method: 'POST', path: `/notes/${id}/unarchive` }
-    case 'note.pin':
-      return { method: 'POST', path: `/notes/${id}/pin` }
-    case 'note.unpin':
-      return { method: 'POST', path: `/notes/${id}/unpin` }
-    case 'note.favourite':
-      return { method: 'POST', path: `/notes/${id}/favourite` }
-    case 'note.unfavourite':
-      return { method: 'POST', path: `/notes/${id}/unfavourite` }
-    case 'action.complete':
-      return { method: 'PATCH', path: `/actions/${id}` }
-  }
+/** One entry in `POST /sync/push`'s per-operation answer. */
+interface PushResult {
+  operation_id: string
+  entity_type: string
+  entity_id: string | null
+  operation: string
+  status: 'applied' | 'conflict' | 'rejected'
+  result: Record<string, unknown>
+  replayed: boolean
 }
 
-async function applyOperation(operation: SyncOperation): Promise<void> {
-  const { method, path } = endpointFor(operation)
+/**
+ * Send one queued operation through the idempotency ledger.
+ *
+ * `POST /sync/push` and not the REST endpoint the same change would use
+ * online, and that difference is the whole point. The ledger records the
+ * `operation_id` against its outcome, so a reconnect that sends an operation
+ * whose answer was lost gets the *first* answer back (`replayed: true`) rather
+ * than applying it twice. Without it, a create that timed out after the server
+ * had already made the note was safe only because the note id comes from the
+ * device — and a replayed update was not safe at all: it re-sent a version the
+ * server had already moved past and came back as a conflict the user had to
+ * resolve, over a save that had in fact succeeded.
+ *
+ * One operation per call rather than a batch. The queue is short by
+ * construction (updates coalesce), the operations are ordered and must not
+ * race, and a per-call answer keeps the failure handling in the drain loop
+ * where it already lives. `MAX_BATCH` on the server is the ceiling if this
+ * ever needs to send more.
+ */
+async function applyOperation(operation: SyncOperation): Promise<PushResult> {
+  const results = await api.post<PushResult[]>('/sync/push', {
+    operations: [
+      {
+        operation_id: operation.operation_id,
+        entity_type: operation.entity_type,
+        entity_id: operation.entity_id,
+        operation: operation.operation,
+        payload: operation.payload,
+        client_stamp: operation.client_stamp,
+      },
+    ],
+  })
 
-  if (method === 'DELETE') {
-    await api.delete(path)
-    await syncQueue.remove(operation.operation_id)
-    await localNoteStore.markClean(operation.entity_id)
-    return
+  const result = results?.[0]
+  if (!result) {
+    // The server answered the push but said nothing about the operation in it.
+    // Treated as a transport failure so the entry stays queued: dropping it
+    // would throw away a change on the strength of a malformed reply.
+    throw new ApiError('SYNC_NO_RESULT', 'The server did not say what happened to that change.', 0)
   }
 
-  const note =
-    method === 'POST'
-      ? await api.post<Note>(path, operation.payload)
-      : await api.patch<Note>(path, operation.payload)
-
-  if (operation.entity_type === 'note' && note?.id) {
-    await localNoteStore.save({ ...note, dirty: 0 })
+  if (result.status === 'applied') {
+    const note = result.result?.note as Note | undefined
+    if (operation.entity_type === 'note' && note?.id) {
+      await localNoteStore.save({ ...note, dirty: 0 })
+    } else if (operation.entity_type === 'note') {
+      // A trash has no note to write back, but the row must stop claiming it
+      // has unsent work.
+      await localNoteStore.markClean(operation.entity_id)
+    }
   }
-  await syncQueue.remove(operation.operation_id)
+
+  return result
 }
 
 /**
@@ -144,20 +165,20 @@ export async function drainQueue(): Promise<SyncStatus> {
   publish({ state: 'syncing', pending: pending.length, error: null })
 
   const conflicts: SyncConflict[] = [...status.conflicts]
+  /** Operations past MAX_ATTEMPTS: stepped over, not sent, never dropped. */
+  let setAside = 0
 
   for (const operation of pending) {
-    try {
-      await applyOperation(operation)
-    } catch (error) {
-      if (error instanceof ApiError && error.isOffline) {
-        // Still offline. Stop; the queue survives for the next attempt.
-        draining = false
-        publish({ state: 'offline', pending: await syncQueue.count() })
-        return status
-      }
+    if (operation.attempts >= MAX_ATTEMPTS) {
+      setAside += 1
+      continue
+    }
 
-      if (error instanceof ApiError && error.isConflict) {
-        const serverNote = error.details.note as Note | undefined
+    try {
+      const result = await applyOperation(operation)
+
+      if (result.status === 'conflict') {
+        const serverNote = result.result?.note as Note | undefined
         if (serverNote) {
           conflicts.push({
             noteId: operation.entity_id,
@@ -173,7 +194,7 @@ export async function drainQueue(): Promise<SyncStatus> {
         continue
       }
 
-      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+      if (result.status === 'rejected') {
         // The server refuses this operation and always will — a deleted note,
         // revoked access, a validation failure. Keeping it would block every
         // operation behind it forever.
@@ -182,16 +203,36 @@ export async function drainQueue(): Promise<SyncStatus> {
         continue
       }
 
-      await syncQueue.recordFailure(operation, (error as Error).message)
-      if (operation.attempts + 1 >= MAX_ATTEMPTS) {
-        await syncQueue.remove(operation.operation_id)
+      await syncQueue.remove(operation.operation_id)
+    } catch (error) {
+      if (error instanceof ApiError && error.isOffline) {
+        // Still offline. Stop; the queue survives for the next attempt.
+        //
+        // `conflicts` goes out with it. It is seeded from the published status
+        // and added to as the loop runs, so leaving it off this exit published
+        // a status whose conflict list was older than the one just built — and
+        // since the conflicting operation has already left the queue, nothing
+        // would ever rediscover it. The banner stayed empty and the note
+        // stayed dirty for ever.
+        draining = false
+        publish({ state: 'offline', pending: await syncQueue.count(), conflicts })
+        return status
       }
+
+      // A 4xx that reaches here is the push itself being refused — a malformed
+      // batch, a rate limit — not one operation's verdict, which arrives as a
+      // `rejected` result above.
+      await syncQueue.recordFailure(operation, (error as Error).message)
 
       draining = false
       publish({
         state: 'error',
         pending: await syncQueue.count(),
-        error: 'Some changes could not be saved. They are still on this device.',
+        conflicts,
+        error:
+          operation.attempts + 1 >= MAX_ATTEMPTS
+            ? 'A change could not be saved after several attempts. It is still on this device — Settings shows what is waiting.'
+            : 'Some changes could not be saved. They are still on this device.',
       })
       return status
     }
@@ -199,11 +240,15 @@ export async function drainQueue(): Promise<SyncStatus> {
 
   draining = false
   publish({
-    state: conflicts.length > 0 ? 'conflict' : 'idle',
+    state: conflicts.length > 0 ? 'conflict' : setAside > 0 ? 'error' : 'idle',
     pending: await syncQueue.count(),
     lastSyncedAt: new Date().toISOString(),
     conflicts,
-    error: null,
+    error:
+      setAside > 0
+        ? `${setAside === 1 ? 'A change' : `${setAside} changes`} could not be saved after several attempts. ` +
+          'They are still on this device — Settings shows what is waiting.'
+        : null,
   })
 
   return status

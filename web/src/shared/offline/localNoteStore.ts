@@ -64,12 +64,37 @@ export const localNoteStore = {
       const local = existing.get(incoming.id)
       if (local?.dirty === 1) return local
 
-      return {
+      const next: LocalNote = {
         ...local,
         ...incoming,
         dirty: 0 as const,
         local_updated_at: local?.local_updated_at,
       }
+
+      // A summary carries `version` but not `document` — only the detail row
+      // does — so this spread would otherwise take the server's new version
+      // number and keep the old cached body underneath it. That row then reads
+      // as a note on version 5 whose text is version 4's, and the offline open
+      // path hands it to the editor as a full note. The next save carries
+      // version 5 with a document that never contained the other person's
+      // paragraph, the optimistic lock passes, and their work is gone with no
+      // 409 and no conflict banner — the exact silent loss the version
+      // mechanism exists to prevent.
+      //
+      // So the body is dropped whenever the version moved. The note stays
+      // cached and listable; it simply stops claiming to hold a document it
+      // cannot vouch for, and opening it offline says so rather than editing
+      // the wrong text.
+      if (
+        local?.document !== undefined &&
+        !('document' in incoming) &&
+        local.version !== incoming.version
+      ) {
+        delete next.document
+        delete next.content_hash
+      }
+
+      return next
     })
 
     await idb.putMany(STORE_NOTES, merged)

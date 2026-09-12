@@ -172,6 +172,22 @@ describe('the local note store', () => {
     expect(await syncQueue.count()).toBe(0)
   })
 
+  it('drops a cached body the server has moved past', async () => {
+    await localNoteStore.save({
+      ...summary('n1', { version: 4 }),
+      document: { type: 'doc', content: [] },
+    } as LocalNote)
+
+    // A list refresh brings summaries, which carry `version` but never
+    // `document`. Keeping the old body under the new number makes the next
+    // save overwrite whoever produced version 5, silently.
+    await localNoteStore.mergeFromServer([summary('n1', { version: 5 })])
+
+    const cached = await localNoteStore.get('n1')
+    expect(cached?.version).toBe(5)
+    expect(cached?.document).toBeUndefined()
+  })
+
   it('leaves the cache alone when the same user returns', async () => {
     await localNoteStore.ensureOwner('user-a')
     await localNoteStore.save(summary('mine'))
@@ -248,20 +264,55 @@ describe('the sync queue', () => {
   })
 })
 
+/**
+ * One entry of `POST /sync/push`'s per-operation answer.
+ *
+ * The queue does not call the REST endpoint a change would use online: it
+ * calls the ledger, which records each `operation_id` against its outcome so a
+ * replayed send cannot apply twice.
+ */
+function pushed(
+  status: 'applied' | 'conflict' | 'rejected',
+  result: Record<string, unknown> = {},
+  replayed = false,
+) {
+  return [
+    {
+      operation_id: 'op',
+      entity_type: 'note',
+      entity_id: 'n1',
+      operation: 'note.update',
+      status,
+      result,
+      replayed,
+    },
+  ]
+}
+
 describe('draining the queue', () => {
-  it('sends queued work and empties the queue', async () => {
-    mockedApi.post.mockResolvedValue(detail('n1'))
+  it('sends queued work through the ledger and empties the queue', async () => {
+    mockedApi.post.mockResolvedValue(pushed('applied', { note: detail('n1') }))
     await syncQueue.enqueue('note.create', 'note', 'n1', { id: 'n1', title: 'made offline' })
 
     const status = await drainQueue()
 
-    expect(mockedApi.post).toHaveBeenCalledWith('/notes', { id: 'n1', title: 'made offline' })
+    const [path, body] = mockedApi.post.mock.calls[0]
+    expect(path).toBe('/sync/push')
+    // The operation id is what makes a replay safe. Sent as plain REST — which
+    // is what this used to do — the server had no way to recognise the second
+    // copy of a send whose answer was lost.
+    expect(body.operations[0]).toMatchObject({
+      operation: 'note.create',
+      entity_id: 'n1',
+      payload: { id: 'n1', title: 'made offline' },
+    })
+    expect(body.operations[0].operation_id).toMatch(/^[0-9a-f-]{36}$/)
     expect(status.state).toBe('idle')
     expect(await syncQueue.count()).toBe(0)
   })
 
   it('keeps the queue when the connection is still gone', async () => {
-    mockedApi.patch.mockRejectedValue(new ApiError('OFFLINE', 'offline', 0))
+    mockedApi.post.mockRejectedValue(new ApiError('OFFLINE', 'offline', 0))
     await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'x' })
 
     const status = await drainQueue()
@@ -272,9 +323,7 @@ describe('draining the queue', () => {
 
   it('parks a conflict for the user instead of picking a winner', async () => {
     const server = detail('n1', { title: 'what someone else saved', version: 4 })
-    mockedApi.patch.mockRejectedValue(
-      new ApiError('VERSION_CONFLICT', 'changed elsewhere', 409, { note: server, server_version: 4 }),
-    )
+    mockedApi.post.mockResolvedValue(pushed('conflict', { note: server, server_version: 4 }))
     await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'my offline draft' })
 
     const status = await drainQueue()
@@ -289,8 +338,26 @@ describe('draining the queue', () => {
     expect(await syncQueue.count()).toBe(0)
   })
 
+  it('still reports a conflict when a later operation finds the network gone', async () => {
+    const server = detail('n1', { title: 'theirs', version: 4 })
+    mockedApi.post
+      .mockResolvedValueOnce(pushed('conflict', { note: server, server_version: 4 }))
+      .mockRejectedValueOnce(new ApiError('OFFLINE', 'offline', 0))
+    await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'mine' })
+    await syncQueue.enqueue('note.update', 'note', 'n2', { title: 'later' })
+
+    const status = await drainQueue()
+
+    // The conflicting operation has already left the queue, so a conflict
+    // dropped on the way out is one nothing can ever rediscover: the banner
+    // stays empty and the note stays dirty for ever.
+    expect(status.state).toBe('offline')
+    expect(status.conflicts).toHaveLength(1)
+    expect(status.conflicts[0].noteId).toBe('n1')
+  })
+
   it('drops an operation the server will never accept', async () => {
-    mockedApi.patch.mockRejectedValue(new ApiError('NOT_FOUND', 'gone', 404))
+    mockedApi.post.mockResolvedValue(pushed('rejected', { error: { code: 'NOT_FOUND' } }))
     await syncQueue.enqueue('note.update', 'note', 'deleted-note', { title: 'x' })
 
     await drainQueue()
@@ -300,33 +367,50 @@ describe('draining the queue', () => {
   })
 
   it('does not stop the whole queue on one bad operation', async () => {
-    mockedApi.patch.mockRejectedValueOnce(new ApiError('NOT_FOUND', 'gone', 404))
-    mockedApi.patch.mockResolvedValueOnce(detail('n2'))
+    mockedApi.post
+      .mockResolvedValueOnce(pushed('rejected', { error: { code: 'NOT_FOUND' } }))
+      .mockResolvedValueOnce(pushed('applied', { note: detail('n2') }))
     await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'doomed' })
     await syncQueue.enqueue('note.update', 'note', 'n2', { title: 'fine' })
 
     await drainQueue()
 
     expect(await syncQueue.count()).toBe(0)
-    expect(mockedApi.patch).toHaveBeenCalledTimes(2)
+    expect(mockedApi.post).toHaveBeenCalledTimes(2)
   })
 
-  it('sends a trash as a DELETE, not an archive', async () => {
-    mockedApi.delete.mockResolvedValue(undefined)
+  it('sets a repeatedly failing change aside rather than deleting it', async () => {
+    mockedApi.post.mockRejectedValue(new ApiError('SERVER_ERROR', 'boom', 500))
+    await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'keeps failing' })
+
+    for (let attempt = 0; attempt < 6; attempt += 1) await drainQueue()
+
+    // The status line says the change is still on this device. Deleting it
+    // made that a lie — and left the note dirty for ever, so nothing would
+    // retry it or show it to anyone.
+    expect(await syncQueue.count()).toBe(1)
+    expect(getSyncStatus().error).toContain('still on this device')
+  })
+
+  it('sends a trash as its own operation, never a permanent delete', async () => {
+    mockedApi.post.mockResolvedValue(pushed('applied', {}))
     await syncQueue.enqueue('note.trash', 'note', 'n1', {})
 
     await drainQueue()
 
-    expect(mockedApi.delete).toHaveBeenCalledWith('/notes/n1')
-    // No ?permanent — a queued delete is always the recoverable kind.
-    expect(mockedApi.post).not.toHaveBeenCalled()
+    const [, body] = mockedApi.post.mock.calls[0]
+    expect(body.operations[0].operation).toBe('note.trash')
+    // The ledger has no vocabulary for a permanent delete, deliberately: a
+    // destruction taken offline and replayed later is not one the user can
+    // take back.
+    expect(mockedApi.delete).not.toHaveBeenCalled()
   })
 
   it('tells subscribers when the state changes', async () => {
     const seen: string[] = []
     subscribeToSync((status) => seen.push(status.state))
 
-    mockedApi.post.mockResolvedValue(detail('n1'))
+    mockedApi.post.mockResolvedValue(pushed('applied', { note: detail('n1') }))
     await syncQueue.enqueue('note.create', 'note', 'n1', {})
     await drainQueue()
 
@@ -335,9 +419,7 @@ describe('draining the queue', () => {
   })
 
   it('lets a conflict be dismissed once the user has chosen', async () => {
-    mockedApi.patch.mockRejectedValue(
-      new ApiError('VERSION_CONFLICT', 'changed', 409, { note: detail('n1') }),
-    )
+    mockedApi.post.mockResolvedValue(pushed('conflict', { note: detail('n1') }))
     await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'mine' })
     await drainQueue()
 
@@ -347,7 +429,7 @@ describe('draining the queue', () => {
   })
 
   it('writes the server copy back to the cache after a successful send', async () => {
-    mockedApi.patch.mockResolvedValue(detail('n1', { title: 'saved' }))
+    mockedApi.post.mockResolvedValue(pushed('applied', { note: detail('n1', { title: 'saved' }) }))
     await localNoteStore.save({ ...summary('n1'), dirty: 1 } as LocalNote)
     await syncQueue.enqueue('note.update', 'note', 'n1', { title: 'saved' })
 
