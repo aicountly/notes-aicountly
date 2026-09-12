@@ -13,16 +13,67 @@ import { Button, Dialog } from '../../shared/ui/primitives'
 import type { ImageUploader } from './extensions/pasteHandling'
 import './editor.css'
 
-/** Everything the server's `safeUrl()` will accept in an href. */
-const SAFE_SCHEME = /^(https?:\/\/|mailto:|tel:|\/|#)/i
+/**
+ * Everything the server's `safeUrl()` will accept in an href.
+ *
+ * `#anchor` is in and a leading `/` is not, which looks arbitrary until you
+ * read the server: `safeUrl()` takes an `allowAppRelative` flag, and the image
+ * `src` path passes it while the link `href` path does not. So a link to
+ * `/notes/abc` used to be accepted here, saved, and then quietly deleted by
+ * the sanitiser — the text stayed, the link was gone, and nothing said why.
+ * Refusing it in the dialog is the same rule stated where the writer can still
+ * do something about it.
+ */
+const SAFE_SCHEME = /^(https?:\/\/|mailto:|tel:|#)/i
 
-function normaliseHref(value: string): string | null {
+export type HrefResult = { href: string } | { error: string }
+
+/**
+ * The image rule, which really is different.
+ *
+ * `safeUrl(..., allowAppRelative: true)` is what the sanitiser applies to a
+ * `src`, so `/notes/{id}/attachments/{id}/content` — the address every
+ * uploaded image in a document carries — has to be accepted here. Pasting one
+ * of those into this field is a reasonable thing to do, and refusing it
+ * because links cannot do it would be a rule invented on this side.
+ */
+export function normaliseImageSrc(value: string): HrefResult {
   const trimmed = value.trim()
-  if (trimmed === '') return null
+  if (trimmed === '') {
+    return { error: 'Enter the address of an image.' }
+  }
+  if (trimmed.startsWith('//')) {
+    // Scheme-relative: the sanitiser refuses it, so the dialog does too.
+    return { error: 'Enter the address of an image.' }
+  }
+  if (trimmed.startsWith('/')) {
+    return { href: trimmed }
+  }
+
+  const result = normaliseHref(trimmed)
+
+  return 'href' in result ? result : { error: 'Enter the address of an image.' }
+}
+
+export function normaliseHref(value: string): HrefResult {
+  const trimmed = value.trim()
+  if (trimmed === '') {
+    return { error: 'Enter a web address, an email address or a phone number.' }
+  }
+
+  if (trimmed.startsWith('/')) {
+    return {
+      error: 'A link needs a full web address. A path on its own is not stored.',
+    }
+  }
+
   // A bare domain is what people type; assuming https is friendlier than an
   // error, and the server rejects anything that is not a real scheme anyway.
   const candidate = SAFE_SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`
-  return SAFE_SCHEME.test(candidate) ? candidate : null
+
+  return SAFE_SCHEME.test(candidate)
+    ? { href: candidate }
+    : { error: 'Enter a web address, an email address or a phone number.' }
 }
 
 export function LinkDialog({
@@ -55,12 +106,12 @@ export function LinkDialog({
         className="editor-form"
         onSubmit={(event) => {
           event.preventDefault()
-          const href = normaliseHref(value)
-          if (!href) {
-            setError('Enter a web address, an email address or a phone number.')
+          const result = normaliseHref(value)
+          if ('error' in result) {
+            setError(result.error)
             return
           }
-          onSubmit(href)
+          onSubmit(result.href)
         }}
       >
         <div className="editor-field">
@@ -161,12 +212,12 @@ export function ImageDialog({
         className="editor-form"
         onSubmit={(event) => {
           event.preventDefault()
-          const href = normaliseHref(url)
-          if (!href) {
-            setError('Enter the address of an image.')
+          const result = normaliseImageSrc(url)
+          if ('error' in result) {
+            setError(result.error)
             return
           }
-          onInsert({ src: href, alt })
+          onInsert({ src: result.href, alt })
         }}
       >
         <div className="editor-field">

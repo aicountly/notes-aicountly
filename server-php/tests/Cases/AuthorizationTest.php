@@ -83,6 +83,28 @@ final class AuthorizationTest extends TestCase
         $this->assertSame(0, $this->bob->get('/notes/counts')['body']['data']['active']);
     }
 
+    /**
+     * The Trash badge counts what the Trash screen will show.
+     *
+     * A share grants access to a note, never a say in whether its owner throws
+     * it away — `list()` scopes the trash to the owner, so counting every
+     * trashed note the caller can reach put a number on the sidebar badge that
+     * the empty screen behind it then contradicted.
+     */
+    public function testTheTrashBadgeAgreesWithTheTrashScreen(): void
+    {
+        $note = $this->aliceNote('shared then binned');
+        $this->share($note['id'], 'user-b', 'editor');
+        $this->assertSame(204, $this->alice->delete('/notes/' . $note['id'])['status']);
+
+        $this->assertCount(0, $this->bob->get('/notes', ['scope' => 'trash'])['body']['data']);
+        $this->assertSame(0, $this->bob->get('/notes/counts')['body']['data']['trashed']);
+
+        // And the owner still sees their own.
+        $this->assertCount(1, $this->alice->get('/notes', ['scope' => 'trash'])['body']['data']);
+        $this->assertSame(1, $this->alice->get('/notes/counts')['body']['data']['trashed']);
+    }
+
     // -- Roles --------------------------------------------------------------
 
     public function testAViewerCanReadButNotEdit(): void

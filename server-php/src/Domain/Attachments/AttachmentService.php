@@ -9,6 +9,7 @@ use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Activity\ActivityRecorder;
 use Aicountly\Api\Domain\Collaboration\NotePermissionService;
 use Aicountly\Api\Domain\Jobs\JobQueue;
+use Aicountly\Api\Domain\Notes\NoteDocument;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Integrations\DriveAttachmentService;
@@ -886,7 +887,16 @@ final class AttachmentService
         // Hard cap: `to_tsvector` refuses a string over 1 MB, and the vector is
         // GENERATED, so an oversized value would make every write to the note
         // fail rather than just this one.
-        $derived = Str::limit(implode("\n\n", array_filter($parts)), self::MAX_DERIVED_CHARS);
+        //
+        // Bounded in BYTES, which is the unit PostgreSQL counts. The character
+        // cap beside it is not the same thing: 200,000 characters of Devanagari
+        // or CJK is several times that many bytes, so text that is not mostly
+        // ASCII could pass the character check and still be refused by the
+        // database. Both are applied — characters first, because that is the
+        // documented ceiling on how much OCR one note carries.
+        $derived = NoteDocument::boundForIndexing(
+            Str::limit(implode("\n\n", array_filter($parts)), self::MAX_DERIVED_CHARS),
+        );
 
         Connection::execute(
             'UPDATE notes SET derived_text = :derived WHERE id = :id AND derived_text <> :derived',

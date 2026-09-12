@@ -405,7 +405,13 @@ final class NoteRepository
              SELECT
                 count(*) FILTER (WHERE n.deleted_at IS NULL AND NOT n.is_archived) AS active,
                 count(*) FILTER (WHERE n.deleted_at IS NULL AND n.is_archived) AS archived,
-                count(*) FILTER (WHERE n.deleted_at IS NOT NULL) AS trashed,
+                -- Owner-scoped, exactly as the Trash list is. A share grants
+                -- access to a note, never a say in whether its owner throws it
+                -- away: list() refuses to show a collaborator a trashed note
+                -- belonging to someone else, so counting it here put a number
+                -- on the badge that the screen behind it then contradicted.
+                count(*) FILTER (WHERE n.deleted_at IS NOT NULL
+                                   AND n.owner_user_id = :auth_user) AS trashed,
                 count(*) FILTER (WHERE n.deleted_at IS NULL AND NOT n.is_archived AND n.is_pinned) AS pinned,
                 count(*) FILTER (WHERE n.deleted_at IS NULL AND NOT n.is_archived AND n.is_favourite) AS favourite,
                 count(*) FILTER (WHERE n.deleted_at IS NULL AND NOT n.is_archived

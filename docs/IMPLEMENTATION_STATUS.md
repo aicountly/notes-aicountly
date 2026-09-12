@@ -12,8 +12,8 @@ rather than left for someone to discover.
 
 | Suite | Result |
 |---|---|
-| Backend (`server-php/tests/run.php`) | 553 tests, 2532 assertions, 0 failures |
-| Frontend unit (`vitest`) | 43 files, 386 tests |
+| Backend (`server-php/tests/run.php`) | 557 tests, 2544 assertions, 0 failures |
+| Frontend unit (`vitest`) | 44 files, 393 tests |
 | Browser (`playwright`) | 16 tests, desktop + phone viewports |
 | Types (`tsc -b`) | clean |
 | Migrations | apply from an empty database; `0008_pgvector` records itself *skipped* where the extension is absent |
@@ -77,17 +77,14 @@ are listed separately as **unverified** — they are leads, not conclusions.
 | `extractText` joined text nodes with a space, indexing a bolded word as `Ai count ly` | `NoteDocument.php` |
 | Voice recording and scanning were hidden behind flags the server never required to accept a file | `QuickCapture.tsx` |
 | Help described a tag field that existed nowhere — a note's tags could be read and not changed | `NoteInfoPanel.tsx`, `HelpPage.tsx` |
+| A long note could make **every** write to itself fail: `search_vector` is GENERATED and `to_tsvector` refuses input over 1,048,575 bytes, so past that the note could not be saved, renamed, pinned or trashed | `NoteDocument::boundForIndexing` |
+| The sidebar Trash badge counted other people's trashed notes that the Trash screen then refused to show | `NoteRepository::sidebarCounts` |
+| The link dialog accepted `/`-relative hrefs that the sanitiser deletes on save — the text stayed, the link vanished, nothing said why | `EditorDialogs.tsx` |
 
 ### Open findings
 
-Confirmed by the verify pass and **not yet fixed**. Everything the audit rated
-*high* or *medium* has since been closed and moved above; these three remain.
-
-| Sev | Finding | Where |
-|---|---|---|
-| Low | The sidebar Trash badge counts other people's trashed notes that the Trash list then refuses to show | `NoteRepository.php:296` |
-| Low | `notes.extracted_text` is uncapped while `search_vector` is a generated `tsvector`, so a document under the 4 MB limit can make every write to that note fail | `0001_core_notes.sql:96` |
-| Low | The link dialog accepts `/`-relative hrefs that the server silently deletes on save | `EditorDialogs.tsx:16` |
+None. Every finding the verify pass confirmed has been fixed, and each one has
+a test that fails without its fix. What is left is the unverified list below.
 
 ### Unverified leads
 

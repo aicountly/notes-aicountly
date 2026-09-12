@@ -223,6 +223,48 @@ final class NoteDocumentTest extends TestCase
         $this->assertFalse(str_contains($text, 'AliceBob'), 'so do cells in one row');
     }
 
+    /**
+     * A note long enough to break its own index does not break it.
+     *
+     * `notes.search_vector` is GENERATED, and `to_tsvector` refuses a string
+     * over 1,048,575 bytes. Because the column is recomputed on every write,
+     * crossing that line did not merely stop the note being searchable: every
+     * later save, rename, pin, trash and restore of it failed, and only an
+     * UPDATE run by hand could bring it back. 4 MB of varied prose is inside
+     * what the API accepts, so this is reachable by writing a long note.
+     */
+    public function testTheIndexedTextIsBoundedSoALongNoteStaysWritable(): void
+    {
+        $paragraphs = [];
+        for ($i = 0; $i < 40000; $i++) {
+            // Distinct words, because identical ones collapse into one lexeme
+            // and never reach the limit however many times they repeat.
+            $paragraphs[] = ['type' => 'paragraph', 'content' => [[
+                'type' => 'text',
+                'text' => 'reconciliation' . $i . ' invoice' . $i . ' ' . md5((string) $i),
+            ]]];
+        }
+
+        $text = NoteDocument::extractText(['type' => 'doc', 'content' => $paragraphs]);
+
+        $this->assertTrue(
+            strlen($text) <= NoteDocument::MAX_INDEXED_BYTES,
+            'bounded in bytes, which is the unit PostgreSQL counts',
+        );
+        // Cut on a word boundary, so the last thing indexed is a word and not
+        // half of one.
+        $this->assertFalse(str_ends_with($text, ' '));
+    }
+
+    /** Multibyte text is cut by bytes without splitting a character. */
+    public function testTheBoundDoesNotCutAMultibyteCharacterInHalf(): void
+    {
+        $text = NoteDocument::boundForIndexing(str_repeat('नमस्ते ', 200000));
+
+        $this->assertTrue(strlen($text) <= NoteDocument::MAX_INDEXED_BYTES);
+        $this->assertSame($text, mb_convert_encoding($text, 'UTF-8', 'UTF-8'), 'still valid UTF-8');
+    }
+
     public function testExtractsChecklistItemsInOrder(): void
     {
         $document = \Aicountly\Api\Tests\Support::checklist([

@@ -328,6 +328,47 @@ final class NotesApiTest extends TestCase
         $this->assertCount(3, $byDate['body']['data'], 'the list starts again from the top');
     }
 
+    /**
+     * The note that used to become unwritable, saved and then saved again.
+     *
+     * The bound lives in NoteDocument; this is the proof that it is enough.
+     * `search_vector` is GENERATED, so if the text were too long the failure
+     * would not be this request alone — every later write to the row would
+     * fail too, which is why the second save is here.
+     */
+    public function testAVeryLongNoteSavesAndStaysWritable(): void
+    {
+        // Few nodes, enormous text. A long document is capped by the node
+        // budget long before it reaches the tsvector limit; what gets past
+        // both is a handful of paragraphs each holding a wall of distinct
+        // words — a pasted export, a log, a transcript. Identical words would
+        // collapse into one lexeme and never reach the limit however many
+        // times they repeat, so these are all different.
+        $wall = '';
+        for ($i = 0; $i < 30000; $i++) {
+            $wall .= 'ledger' . $i . ' ' . md5((string) $i) . ' ';
+        }
+
+        $paragraphs = [];
+        for ($p = 0; $p < 3; $p++) {
+            $paragraphs[] = [
+                'type' => 'paragraph',
+                'content' => [['type' => 'text', 'text' => $wall]],
+            ];
+        }
+
+        $created = $this->api->post('/notes', [
+            'title' => 'Every transaction this year',
+            'document' => ['type' => 'doc', 'content' => $paragraphs],
+        ]);
+        $this->assertSame(201, $created['status']);
+
+        $note = $created['body']['data'];
+        $renamed = $this->api->patch('/notes/' . $note['id'], ['title' => 'Renamed after the fact']);
+        $this->assertSame(200, $renamed['status']);
+        $this->assertSame(204, $this->api->delete('/notes/' . $note['id'])['status']);
+    }
+
     public function testVersionHistoryIsCheckpointedNotOnePerKeystroke(): void
     {
         $note = $this->api->post('/notes', ['title' => 'Draft', 'document' => Support::doc('v1')])['body']['data'];

@@ -98,7 +98,13 @@ export function NoteEditorPane({
   // rather than immediate: the list this pane sits beside is still fetching
   // and rendering, and competing with it would trade one wait for another.
   useEffect(() => {
-    const start = () => void loadEditor()
+    // Swallowed on purpose. This is an opportunistic warm-up, and the one
+    // thing guaranteed to make it fail is the case the app is built for:
+    // offline, where the chunk has not been cached yet and `import()` rejects.
+    // Unhandled, that rejection surfaces as an error in the console of a
+    // working app — and the real attempt still happens later, through
+    // Suspense, when the reader actually opens a note.
+    const start = () => void loadEditor().catch(() => undefined)
 
     if (typeof window.requestIdleCallback === 'function') {
       const handle = window.requestIdleCallback(start, { timeout: 3_000 })

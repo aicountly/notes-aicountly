@@ -361,6 +361,27 @@ final class NoteDocument
     ];
 
     /**
+     * How much flattened text is stored for indexing.
+     *
+     * PostgreSQL refuses a tsvector built from more than 1,048,575 bytes —
+     * `string is too long for tsvector` — and `notes.search_vector` is a
+     * GENERATED column, so it is recomputed on **every** write to the row. A
+     * note that crossed the line did not merely stop being searchable: every
+     * later save, rename, pin, trash and restore of it failed, and the only
+     * way back was an UPDATE run by hand. A 4 MB document of ordinary varied
+     * prose reaches that easily, and 4 MB is what the API accepts.
+     *
+     * Two of these feed one vector (`extracted_text` at weight B,
+     * `derived_text` at C), so each is budgeted under half the limit with room
+     * for the title and for a tsvector that is larger than its input.
+     *
+     * The document itself is never truncated — it is stored whole, and what
+     * the reader sees is all of it. What is bounded is how much of a very long
+     * note the index covers.
+     */
+    public const MAX_INDEXED_BYTES = 393_216;
+
+    /**
      * Flatten to plain text for `notes.extracted_text`, which is what the
      * `search_vector` generated column indexes.
      */
@@ -394,7 +415,28 @@ final class NoteDocument
         $text = preg_replace('/[ \t]+/u', ' ', implode('', $parts)) ?? '';
         $text = preg_replace('/\s*\n\s*/u', "\n", $text) ?? $text;
 
-        return trim($text);
+        return self::boundForIndexing(trim($text));
+    }
+
+    /**
+     * Cut to what an index can actually hold, on a word boundary.
+     *
+     * `mb_strcut` rather than `mb_substr`: the limit is in bytes, which is
+     * what PostgreSQL counts, and cutting by characters would still overshoot
+     * for text that is not ASCII. Trimming back to the last space keeps the
+     * final word whole rather than indexing half of one as a lexeme of its
+     * own.
+     */
+    public static function boundForIndexing(string $text): string
+    {
+        if (strlen($text) <= self::MAX_INDEXED_BYTES) {
+            return $text;
+        }
+
+        $cut = mb_strcut($text, 0, self::MAX_INDEXED_BYTES, 'UTF-8');
+        $lastSpace = mb_strrpos($cut, ' ');
+
+        return rtrim($lastSpace === false ? $cut : mb_substr($cut, 0, $lastSpace));
     }
 
     /**
