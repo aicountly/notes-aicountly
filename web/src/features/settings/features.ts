@@ -54,6 +54,12 @@ export const FEATURE_ROWS: FeatureRow[] = [
     off: 'Audio is stored and played back, but not transcribed.',
   },
   {
+    flag: 'realtime',
+    label: 'Live collaboration',
+    on: 'See who else has a shared note open, and know within a few seconds when their changes are saved — without waiting for a save of your own to collide with theirs.',
+    off: 'Shared notes still work; you will only find out about someone else\u2019s changes when you reload or try to save your own.',
+  },
+  {
     flag: 'canvas',
     label: 'Canvas notes',
     on: 'Freeform canvas notes, alongside documents and checklists.',

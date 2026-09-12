@@ -117,6 +117,12 @@ export function NoteEditor({
 
   const [title, setTitle] = useState(note.title ?? '')
   const [pasteError, setPasteError] = useState<string | null>(null)
+  // Set by the version-compare effect below when a newer save exists but
+  // applying it right now would be exactly the silent overwrite this editor
+  // is built to refuse (the writer is focused, or has something unsent).
+  // Purely informational: it never gates or triggers applying content, so it
+  // cannot introduce a second, slightly different copy of that safety check.
+  const [remoteUpdateWaiting, setRemoteUpdateWaiting] = useState(false)
   const [pastingImage, setPastingImage] = useState(false)
   const [linkDialog, setLinkDialog] = useState<{ open: boolean; href: string }>({
     open: false,
@@ -349,6 +355,7 @@ export function NoteEditor({
       loadedVersion.current = note.version
       setTitle(note.title ?? '')
       setPasteError(null)
+      setRemoteUpdateWaiting(false)
       applyContent(editor, note.document)
       return
     }
@@ -361,6 +368,14 @@ export function NoteEditor({
       loadedVersion.current = note.version
       setTitle(note.title ?? '')
       applyContent(editor, note.document)
+      setRemoteUpdateWaiting(false)
+    } else if (isNewer) {
+      // Newer, but this is exactly the case the rule above exists to refuse:
+      // applying it now would jump the caret or throw away an unsent edit. The
+      // writer is told instead of finding out only when their own save later
+      // bounces off a 409 — presence (see usePresence) is what notices this
+      // before that save is even attempted.
+      setRemoteUpdateWaiting(true)
     }
   }, [editor, note, autosave.hasPendingChanges, applyContent])
 
@@ -535,6 +550,27 @@ export function NoteEditor({
                 ) : null}
                 <Button size="sm" variant="primary" onClick={keepMyVersion}>
                   Keep mine
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Never alongside the conflict banner: a real conflict already says
+            "changed elsewhere" more forcefully, and showing both for the same
+            fact would just be noise. */}
+        {!conflict && remoteUpdateWaiting ? (
+          <div className="editor__banner editor__banner--info" role="status">
+            <Icon name="refresh" size={16} aria-hidden />
+            <div className="editor__banner-body">
+              <p className="editor__banner-title">Someone saved changes to this note</p>
+              <p className="editor__banner-text">
+                Yours are still here and nothing has been overwritten. Theirs will show once this
+                note is no longer being edited.
+              </p>
+              <div className="editor__banner-actions">
+                <Button size="sm" onClick={() => setRemoteUpdateWaiting(false)}>
+                  Dismiss
                 </Button>
               </div>
             </div>

@@ -185,10 +185,13 @@ unconfigured deployment looks like a smaller product, not a broken one.
 Stated plainly, because architecture that is *ready for* something is not the
 same as having it:
 
-- **Real-time collaborative editing.** The document format is ProseMirror JSON
-  and the service boundaries are CRDT-shaped, so Yjs can be added without
+- **Character-level collaborative editing.** The document format is ProseMirror
+  JSON and the service boundaries are CRDT-shaped, so Yjs can be added without
   changing the storage model. There is no realtime server, and no custom OT was
-  invented in its place. The flag stays off.
+  invented in its place — two people editing the same paragraph at the same
+  moment still resolve through the version-conflict banner. What *is* built
+  under the `realtime` flag is presence and prompt live-update polling — see
+  `REALTIME.md` for exactly where that line sits.
 - **Infinite canvas.** `note_type = 'canvas'` and its storage exist; the canvas
   editor does not.
 - **End-to-end encrypted private notes.** The model distinguishes `standard` from

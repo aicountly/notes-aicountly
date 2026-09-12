@@ -24,6 +24,7 @@ const ALL_OFF: FeatureFlags = {
   ocr: false,
   transcription: false,
   canvas: false,
+  realtime: false,
   private_notes: false,
   drive: false,
   calendar: false,

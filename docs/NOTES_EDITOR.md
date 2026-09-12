@@ -79,8 +79,10 @@ swallowing keystrokes reads as a broken editor.
 
 ## Not implemented
 
-- **Collaborative cursors and live co-editing.** The document format is
-  Yjs-compatible; there is no realtime server.
+- **Collaborative cursors and per-keystroke co-editing.** The document format is
+  Yjs-compatible; there is no realtime server, and none was built to fake it.
+  What the `realtime` flag does turn on — who else has a note open, and a
+  prompt refetch when someone else's save lands — is `docs/REALTIME.md`.
 - **Infinite canvas.** The note type and its storage exist; the canvas editor
   does not, and the flag stays off.
 - **Handwriting, ink-to-text, stylus and shape recognition.** Extension points

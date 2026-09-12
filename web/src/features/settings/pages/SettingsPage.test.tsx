@@ -97,6 +97,7 @@ const ALL_OFF: FeatureFlags = {
   ocr: false,
   transcription: false,
   canvas: false,
+  realtime: false,
   private_notes: false,
   drive: false,
   calendar: false,
@@ -285,11 +286,8 @@ describe('SettingsPage — this deployment', () => {
     renderPage()
 
     const capabilities = section(/what this deployment can do/i)
-    // Ten flags, each with a readable On/Off — never a green dot on its own.
-    // (Ten and not eleven since `realtime` was removed: it had no
-    // implementation behind it, so offering to switch it on was an offer the
-    // deployment could not keep.)
-    await waitFor(() => expect(within(capabilities).getAllByRole('listitem')).toHaveLength(10))
+    // Eleven flags, each with a readable On/Off — never a green dot on its own.
+    await waitFor(() => expect(within(capabilities).getAllByRole('listitem')).toHaveLength(11))
     expect(within(capabilities).getAllByText('Off').length).toBeGreaterThan(0)
   })
 })

@@ -66,6 +66,7 @@ That is a healthy result on a host without pgvector. Everything else works.
 | `note_templates` | system, organisation and personal templates |
 | `smart_folders` | saved queries — they never move a note |
 | `note_meetings` | the structured half of a meeting note |
+| `note_presence` | who currently has a note open, for live collaboration — see docs/REALTIME.md |
 | `api_sessions` | short-lived cache of portal session lookups (hashed keys) |
 | `api_rate_limits` | fixed-window counters |
 | `sync_operations` | the idempotency ledger for the offline queue |

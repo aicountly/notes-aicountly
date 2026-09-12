@@ -404,6 +404,7 @@ export interface FeatureFlags {
   ocr: boolean
   transcription: boolean
   canvas: boolean
+  realtime: boolean
   private_notes: boolean
   drive: boolean
   calendar: boolean

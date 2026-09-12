@@ -6,6 +6,7 @@ namespace Aicountly\Api\Domain\Jobs;
 
 use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Attachments\AttachmentService;
+use Aicountly\Api\Domain\Collaboration\PresenceService;
 use Aicountly\Api\Domain\Jobs\Handlers\DerivedTextHandler;
 use Aicountly\Api\Domain\Jobs\Handlers\EmbeddingHandler;
 use Aicountly\Api\Domain\Jobs\Handlers\ObjectPurgeHandler;
@@ -118,6 +119,12 @@ final class Worker
             // authentication decision made by a stale row.
             'sessions_expired' => Connection::execute('DELETE FROM api_sessions WHERE expires_at < now()'),
             'jobs_reaped' => $this->queue->reapStuck(),
+            // A tab that closes without calling DELETE /notes/{id}/presence
+            // (a crash, a lost connection) already ages out of every live
+            // viewer list within seconds; this is only cleaning up the row
+            // itself so the table does not grow with every note anyone has
+            // ever opened.
+            'presence_swept' => (new PresenceService())->sweep(),
         ];
     }
 

@@ -27,6 +27,11 @@ final class RateLimiter
         'upload' => [60, 300],
         'import' => [5, 3600],
         'share' => [60, 3600],
+        // A heartbeat per open note every ~8s. Several tabs on several
+        // notes at once is normal; a client stuck in a tight retry loop is
+        // what this catches. 60/min is generous room above real use and
+        // still a real ceiling.
+        'presence' => [60, 60],
     ];
 
     public static function hit(string $bucket, string $userId): void

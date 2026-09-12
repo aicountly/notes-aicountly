@@ -28,6 +28,17 @@ final class Features
     public const CALENDAR = 'calendar';
     public const CONTACTS = 'contacts';
     public const CONNECT = 'connect';
+    /**
+     * Presence and live-update polling — {@see \Aicountly\Api\Domain\Collaboration\PresenceService}.
+     *
+     * Unlike every other flag above, this one needs nothing outside the
+     * repository: no sibling product, no external engine. It exists as a
+     * flag anyway, for the same reason `NOTES_DRIVE_ENABLED` does — a
+     * deployment gets to decide whether a client polls every few seconds
+     * for every open note, which is a real (if small) and constant load on
+     * a shared-hosting database, not a free capability to always run.
+     */
+    public const REALTIME = 'realtime';
 
     /** flag => env var. */
     private const ENV_KEYS = [
@@ -41,6 +52,7 @@ final class Features
         self::CALENDAR => 'NOTES_CALENDAR_ENABLED',
         self::CONTACTS => 'NOTES_CONTACTS_ENABLED',
         self::CONNECT => 'NOTES_CONNECT_ENABLED',
+        self::REALTIME => 'NOTES_REALTIME_ENABLED',
     ];
 
     /**

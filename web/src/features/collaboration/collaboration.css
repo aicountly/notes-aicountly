@@ -273,3 +273,36 @@
 .collab-activity__item { display: flex; align-items: baseline; gap: var(--notes-space-2); font-size: var(--notes-text-sm); }
 .collab-activity__text { flex: 1; min-width: 0; }
 .collab-activity__time { flex-shrink: 0; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+/* --- Presence -------------------------------------------------------------- */
+
+.presence-avatars {
+  display: flex;
+  align-items: center;
+}
+
+.presence-avatars__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary);
+  border: 2px solid var(--notes-surface);
+  font-size: 10px;
+  font-weight: 700;
+  /* Overlapped like a hand of cards, so three or four names still read as a
+     small group rather than a growing row that pushes the note's own title
+     out of the header. */
+  margin-left: -8px;
+}
+.presence-avatars__item:first-child {
+  margin-left: 0;
+}
+
+.presence-avatars__item--overflow {
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+}

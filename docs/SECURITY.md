@@ -50,6 +50,14 @@ id would be a way around note permissions.
 
 A note the caller cannot see is **404**, not 403.
 
+Presence — who else has a note open — reuses the same gate rather than adding
+a second one: `PresenceService::sync()` requires the same **view** grant as
+reading the note, so a stranger with no grant gets 404 and never learns who is
+looking at a note they cannot see. `leave()` is deliberately the exception: it
+deletes only the caller's own row and checks nothing, because clearing your
+own presence has to keep working even the instant after a grant is revoked.
+Covered by `server-php/tests/Cases/PresenceTest.php`.
+
 Tests covering all of this live in `server-php/tests/Cases/AuthorizationTest.php`
 and are written from the attacker's side: user B tries to read, edit, delete,
 list, search and restore user A's notes, across tenants, through notebook
@@ -136,7 +144,8 @@ bound. Nothing a user stored ever reaches SQL as text.
 Fixed-window, per user and per bucket, in `RateLimiter`. The buckets exist so the
 expensive things can be limited **without limiting typing** — an app that answers
 429 while someone is writing has failed at its one job. Note writes are not rate
-limited. AI, search, semantic search, uploads, imports and sharing are.
+limited. AI, search, semantic search, uploads, imports, sharing and presence
+heartbeats are.
 
 ## Logging
 

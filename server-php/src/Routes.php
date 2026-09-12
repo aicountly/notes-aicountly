@@ -98,6 +98,12 @@ final class Routes
         $router->get('/actions', static fn (Request $r, Identity $i) => $actions()->open($r, $i));
 
         $router->get('/notes/{id}/activity', static fn (Request $r, Identity $i) => (new Controllers\ActivityController())->index($r, $i));
+
+        // Polled every few seconds while a note is open — see
+        // PresenceService for why this is polling and not a pushed stream.
+        $presence = static fn (): Controllers\PresenceController => new Controllers\PresenceController();
+        $router->post('/notes/{id}/presence', static fn (Request $r, Identity $i) => $presence()->sync($r, $i));
+        $router->delete('/notes/{id}/presence', static fn (Request $r, Identity $i) => $presence()->leave($r, $i));
     }
 
     private static function notebooks(Router $router): void

@@ -23,7 +23,10 @@ File notes into nested notebooks, tag them, pin them, colour them, or leave them
 where they land and find them again by searching. Smart folders are saved
 queries, so a note can be in as many as you like and in none of them tomorrow.
 Share a note or a whole notebook as editor, commenter or viewer. Version history
-is always there. So is Trash.
+is always there. So is Trash. Where the deployment has live collaboration
+switched on, you can see who else has a shared note open and know within a
+few seconds when their changes are saved — see docs/REALTIME.md for exactly
+what that does and does not promise.
 
 It works on a train: notes are cached on the device, edits are queued, and when
 the connection returns they sync — and if the note changed in the meantime, you
@@ -128,6 +131,12 @@ canvas, end-to-end encrypted notes — is behind a flag and **defaults to
 off**. A flag also stays off when its dependency is unconfigured, so switching on
 `NOTES_AI_ENABLED` without a `PULSE_API_URL` cannot produce a UI full of buttons
 that fail when pressed.
+
+One flag, `NOTES_REALTIME_ENABLED`, is not about an external dependency at
+all — presence and live-update polling (see docs/REALTIME.md) need nothing
+outside this repository. It defaults to off anyway, because a deployment gets
+to decide whether every open note polls the database every few seconds, which
+is a real and constant cost, not a free capability to always run.
 
 An endpoint behind an off flag answers `503 FEATURE_DISABLED`; the frontend reads
 the same flags from `GET /api/config` and hides or disables the control. There

@@ -18,6 +18,7 @@ import { Icon } from '../../../shared/ui/Icon'
 import { Badge, Button, EmptyState, Skeleton } from '../../../shared/ui/primitives'
 import { useAppConfig } from '../../../app/AppConfigProvider'
 import { useImageUploader, useImageSrcLoader } from '../../attachments/hooks/useAttachments'
+import { usePresence } from '../../collaboration/hooks/usePresence'
 
 /**
  * The editor arrives after the list, not before it.
@@ -43,6 +44,7 @@ import type { NoteType } from '../../../shared/api/types'
 import { NoteInfoPanel } from './NoteInfoPanel'
 import { AttachmentList } from '../../attachments/components/AttachmentList'
 import { ShareDialog } from '../../collaboration/components/ShareDialog'
+import { PresenceAvatars } from '../../collaboration/components/PresenceAvatars'
 import { NoteMenu, daysUntilPurge } from './NoteCard'
 
 export interface NoteEditorPaneProps {
@@ -87,6 +89,28 @@ export function NoteEditorPane({
   // load on its own: it is behind the session's Bearer token. This fetches the
   // bytes with the session and hands back an object URL.
   const loadImageSrc = useImageSrcLoader()
+
+  // Presence is polled from the pane, not from the (lazy-loaded) editor
+  // itself, so viewer avatars appear in the header the instant the note's own
+  // data has loaded — without waiting on the editor chunk. It needs VIEW on
+  // the note, which is what `note.data` having loaded at all already means.
+  const presence = usePresence(note.data?.id, config.features.realtime && note.data !== undefined)
+
+  // A poll just noticed this note has moved on since the copy in the query
+  // cache. Refetching is always safe to *ask for*: NoteEditor's own version
+  // check is what decides whether applying the result would jump a caret or
+  // discard something unsent, and it already refuses to when it would. This
+  // is only what makes that check run promptly instead of waiting for the
+  // writer's own next save to bounce off a 409 first.
+  useEffect(() => {
+    if (presence.version !== null && note.data && presence.version > note.data.version) {
+      void note.refetch()
+    }
+    // note.refetch's identity is not stable across renders, and is not
+    // itself part of what should re-run this: only a newer number seen from
+    // presence, or a newer note actually landing in the cache, should.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presence.version, note.data?.version])
 
   const [infoOpen, setInfoOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
@@ -274,6 +298,7 @@ export function NoteEditorPane({
 
         {!capabilities.edit ? <Badge>View only</Badge> : null}
         {open.privacy_mode === 'private' ? <Badge tone="warning">Private</Badge> : null}
+        <PresenceAvatars viewers={presence.viewers} />
 
         <div className="editor__actions">
           {capabilities.edit && open.deleted_at === null ? (

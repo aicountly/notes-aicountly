@@ -129,8 +129,12 @@ is announced and applied when they say so.
 
 ## Not implemented
 
-**CRDT / real-time collaborative editing.** The document is ProseMirror JSON and
-the sync boundaries are shaped so Yjs can be added without changing storage, but
-there is no realtime server and no custom operational transform was invented in
-its place. Two people editing the same note at the same time will produce a
-version conflict, handled as above — honestly, and without losing either side.
+**CRDT / character-level collaborative editing.** The document is ProseMirror
+JSON and the sync boundaries are shaped so Yjs can be added without changing
+storage, but there is no realtime server and no custom operational transform was
+invented in its place. Two people editing the same note at the same time will
+still produce a version conflict, handled as above — honestly, and without
+losing either side. What presence (`docs/REALTIME.md`) changes is how often two
+people even reach that conflict: a prompt refetch when someone else's save
+lands, while nobody else is mid-edit, means the common case never needs the
+banner at all.

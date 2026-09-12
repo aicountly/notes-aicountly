@@ -45,6 +45,15 @@
   color: var(--notes-danger);
 }
 
+/* Informational rather than urgent — nothing has failed, someone else's save
+   simply landed while this one was mid-edit. Never rendered alongside the
+   conflict banner, which already implies the same fact more forcefully. */
+.editor__banner--info {
+  background: var(--notes-info-soft);
+  border-color: var(--notes-info);
+  color: var(--notes-info);
+}
+
 .editor__banner-body {
   flex: 1;
   min-width: 0;

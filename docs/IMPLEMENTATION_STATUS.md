@@ -12,8 +12,8 @@ rather than left for someone to discover.
 
 | Suite | Result |
 |---|---|
-| Backend (`server-php/tests/run.php`) | 557 tests, 2544 assertions, 0 failures |
-| Frontend unit (`vitest`) | 44 files, 393 tests |
+| Backend (`server-php/tests/run.php`) | 570 tests, 2572 assertions, 0 failures |
+| Frontend unit (`vitest`) | 48 files, 413 tests |
 | Browser (`playwright`) | 16 tests, desktop + phone viewports |
 | Types (`tsc -b`) | clean |
 | Migrations | apply from an empty database; `0008_pgvector` records itself *skipped* where the extension is absent |
@@ -25,7 +25,9 @@ structured ProseMirror documents (not an HTML blob), notebooks, tags, smart
 folders, templates, checklists and actions, reminders with recurrence,
 attachments with OCR/transcription hooks, full-text search with weighted
 ranking, version history, sharing with roles, comments, activity, trash with
-retention, export, an offline-first client with a sync ledger, and a PWA shell.
+retention, export, an offline-first client with a sync ledger, a PWA shell,
+and — where a deployment switches it on — presence and prompt live-update
+polling (`docs/REALTIME.md`).
 
 Feature flags default **off**, and a flag that is off removes its control
 rather than showing one that fails. The four sibling integrations — Drive,
@@ -99,7 +101,7 @@ already been closed by other work, and the remaining nine are fixed:
 | **Every autosave refetched the note being typed into.** `['notes']` is a prefix of `['notes','detail',id]`, so invalidating it discarded the fresh copy the mutation had just been handed. Lists and counts are invalidated on their own key. | `useNotes.ts`, `queryClient.ts` |
 | **A download held the whole file in memory.** `readfile()` streams; `ob_start()` around it to measure `Content-Length` undid that, so a 25 MB attachment was 25 MB of PHP memory. The length comes from the row and the body is written as it is read. | `Response::stream`, `AttachmentsController` |
 | **The service worker applied a new build without asking**, contradicting both the docs and the app's own "Update available" prompt. `install` no longer calls `skipWaiting()`, so the prompt has a waiting worker to act on. | `sw.js` |
-| **`realtime` was a flag with nothing behind it** — no WebSocket, no polling, nothing reading it, and Settings offering to switch on "edits and presence as they happen". Removed. `canvas` stays: it is enforced server-side and gates real controls. | `Features.php`, `features.ts` |
+| **`realtime` was a flag with nothing behind it** — no WebSocket, no polling, nothing reading it, and Settings offering to switch on "edits and presence as they happen". Removed at the time. `canvas` was kept alongside it: it is enforced server-side and gates real controls, which is the distinction that made removing `realtime` the right call rather than a matching one. *(Since implemented for real as presence and live-update polling — see `docs/REALTIME.md` and the "What works" note above. This row is kept as the audit found it; it is a record of that day, not of today.)* | `Features.php`, `features.ts`, `docs/REALTIME.md` |
 | **Local development could not reach the API by following the README.** The documented copy wrote `.env` to the repo root; Vite reads `web/`. | `README.md` |
 | **The README promised two editor triggers that do not exist** — `[[` and `#`. The real ones are `/` and `@`, and tags are added from the info panel. | `README.md` |
 | **The PWA "New checklist" shortcut made an ordinary note.** `?type=checklist` is read now. | `NoteEditorPane.tsx` |
@@ -139,3 +141,11 @@ documented as a pgvector feature while nothing wrote an embedding.
   against semantic search, so switching it on without a gateway leaves the
   feature off rather than half on. With one configured, notes are chunked and
   embedded by the `note.embedding` job as they are saved.
+- **Live collaboration is presence and prompt refetching, not character-level
+  co-editing.** `docs/REALTIME.md` is explicit about the line: no live
+  cursors, no CRDT, no per-keystroke merge. Two people editing the same
+  paragraph at the same moment still resolve through the version-conflict
+  banner. What the `realtime` flag actually buys is knowing someone else is
+  there, and finding out within a few seconds when their save has landed,
+  which is enough to make the common case — nobody else was editing at the
+  same moment — never need that banner at all.
