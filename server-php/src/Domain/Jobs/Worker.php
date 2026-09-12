@@ -7,6 +7,7 @@ namespace Aicountly\Api\Domain\Jobs;
 use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Attachments\AttachmentService;
 use Aicountly\Api\Domain\Jobs\Handlers\DerivedTextHandler;
+use Aicountly\Api\Domain\Jobs\Handlers\EmbeddingHandler;
 use Aicountly\Api\Domain\Jobs\Handlers\ObjectPurgeHandler;
 use Aicountly\Api\Domain\Jobs\Handlers\OcrHandler;
 use Aicountly\Api\Domain\Jobs\Handlers\TextExtractionHandler;
@@ -63,6 +64,7 @@ final class Worker
             JobQueue::OCR => new OcrHandler(),
             JobQueue::TRANSCRIPTION => new TranscriptionHandler(),
             JobQueue::DERIVED_TEXT => new DerivedTextHandler(),
+            JobQueue::EMBEDDING => new EmbeddingHandler(),
             JobQueue::OBJECT_PURGE => new ObjectPurgeHandler(),
         ];
     }

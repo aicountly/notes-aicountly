@@ -10,7 +10,6 @@ use Aicountly\Api\Domain\Collaboration\NoteAccess;
 use Aicountly\Api\Domain\Collaboration\NotePermissionService;
 use Aicountly\Api\Domain\Notes\NoteQuery;
 use Aicountly\Api\Domain\Notes\NoteRepository;
-use Aicountly\Api\Env;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http\ApiException;
 use Aicountly\Api\Support\Logger;
@@ -77,6 +76,7 @@ final class NotesSearchService
     public function __construct(
         private readonly NoteRepository $repository = new NoteRepository(),
         private readonly NotePermissionService $permissions = new NotePermissionService(),
+        private readonly EmbeddingSource $embeddings = new EmbeddingProvider(),
     ) {
     }
 
@@ -499,73 +499,7 @@ final class NotesSearchService
      */
     private function embedQuery(string $query): ?array
     {
-        $base = rtrim(Env::get('PULSE_API_URL'), '/');
-        if ($base === '') {
-            return null;
-        }
-
-        $model = Env::get('PULSE_EMBEDDING_MODEL', 'text-embedding-3-small');
-        $headers = ['Content-Type: application/json', 'Accept: application/json'];
-        if (Env::get('PULSE_API_KEY') !== '') {
-            $headers[] = 'Authorization: Bearer ' . Env::get('PULSE_API_KEY');
-        }
-
-        $handle = curl_init($base . '/embeddings');
-        if ($handle === false) {
-            return null;
-        }
-
-        curl_setopt_array($handle, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_POSTFIELDS => (string) json_encode(['model' => $model, 'input' => $query]),
-            // A search box cannot wait: an embedding that has not arrived in a
-            // few seconds is worth less than keyword results returned now.
-            CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_TIMEOUT => 8,
-        ]);
-
-        $body = curl_exec($handle);
-        $status = (int) curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        curl_close($handle);
-
-        if (!is_string($body) || $status < 200 || $status >= 300) {
-            Logger::warn('search.embedding_unavailable', ['status' => $status]);
-
-            return null;
-        }
-
-        $decoded = json_decode($body, true);
-        if (!is_array($decoded)) {
-            Logger::warn('search.embedding_unreadable', ['status' => $status]);
-
-            return null;
-        }
-
-        $raw = $decoded['data'][0]['embedding'] ?? $decoded['embedding'] ?? null;
-        if (!is_array($raw) || count($raw) < 8 || count($raw) > 4096) {
-            Logger::warn('search.embedding_unreadable', ['status' => $status]);
-
-            return null;
-        }
-
-        $vector = [];
-        foreach ($raw as $value) {
-            if (!is_numeric($value)) {
-                Logger::warn('search.embedding_unreadable', ['status' => $status]);
-
-                return null;
-            }
-            $vector[] = (float) $value;
-        }
-
-        return [
-            'vector' => $vector,
-            // The provider's own name for what it returned, so the stored
-            // chunks filtered on `model` are the ones this vector belongs with.
-            'model' => Str::limit((string) ($decoded['model'] ?? $model), 120),
-        ];
+        return $this->embeddings->embed($query);
     }
 
     // -----------------------------------------------------------------------

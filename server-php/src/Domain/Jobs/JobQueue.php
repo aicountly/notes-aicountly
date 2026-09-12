@@ -42,6 +42,7 @@ final class JobQueue
     public const OCR = 'attachment.ocr';
     public const TRANSCRIPTION = 'attachment.transcription';
     public const DERIVED_TEXT = 'note.derived_text';
+    public const EMBEDDING = 'note.embedding';
     public const OBJECT_PURGE = 'attachment.object_purge';
 
     /**
@@ -55,6 +56,9 @@ final class JobQueue
     private const PRIORITIES = [
         self::THUMBNAIL => 3,
         self::DERIVED_TEXT => 4,
+        // Behind everything a reader is waiting for: a note that is not yet
+        // semantically indexed is still findable by keyword.
+        self::EMBEDDING => 6,
         self::TEXT_EXTRACTION => 5,
         self::OCR => 7,
         self::TRANSCRIPTION => 8,

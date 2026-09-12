@@ -9,6 +9,7 @@ use Aicountly\Api\Database\Connection;
 use Aicountly\Api\Domain\Actions\NoteActionService;
 use Aicountly\Api\Domain\Activity\ActivityRecorder;
 use Aicountly\Api\Domain\Collaboration\NotePermissionService;
+use Aicountly\Api\Domain\Jobs\JobQueue;
 use Aicountly\Api\Domain\Links\NoteLinkService;
 use Aicountly\Api\Domain\Tags\TagService;
 use Aicountly\Api\Features;
@@ -49,7 +50,26 @@ final class NotesService
         private readonly NoteLinkService $links = new NoteLinkService(),
         private readonly NoteActionService $actions = new NoteActionService(),
         private readonly ActivityRecorder $activity = new ActivityRecorder(),
+        private readonly JobQueue $jobs = new JobQueue(),
     ) {
+    }
+
+    /**
+     * Ask for this note to be re-embedded.
+     *
+     * Queued on every content change, and cheap by design: the handler skips
+     * entirely where semantic search is off or no gateway is configured, and
+     * re-embeds only the chunks whose text actually changed. Queued *after*
+     * the write, never inside its transaction, so a queue problem cannot cost
+     * the user their save.
+     */
+    private function queueEmbedding(Identity $identity, string $noteId): void
+    {
+        if (!Features::enabled(Features::SEMANTIC_SEARCH)) {
+            return;
+        }
+
+        $this->jobs->enqueue($identity, JobQueue::EMBEDDING, $noteId);
     }
 
     // -----------------------------------------------------------------------
@@ -122,7 +142,7 @@ final class NotesService
         $counts = NoteDocument::counts($document);
         $contentHash = Str::contentHash(($title ?? '') . "\n" . $extractedText);
 
-        return Connection::transaction(function () use (
+        $created = Connection::transaction(function () use (
             $identity, $noteId, $noteType, $privacyMode, $document, $notebookId,
             $title, $extractedText, $counts, $contentHash, $input
         ): array {
@@ -180,6 +200,10 @@ final class NotesService
 
             return $this->get($identity, $noteId);
         });
+
+        $this->queueEmbedding($identity, $noteId);
+
+        return $created;
     }
 
     // -----------------------------------------------------------------------
@@ -293,7 +317,7 @@ final class NotesService
             return $this->get($identity, $noteId);
         }
 
-        return Connection::transaction(function () use (
+        $updated = Connection::transaction(function () use (
             $identity, $noteId, $note, $updates, $bindings, $input, $document, $title, $expectedVersion
         ): array {
             if ($updates !== []) {
@@ -354,6 +378,14 @@ final class NotesService
 
             return $this->get($identity, $noteId);
         });
+
+        // Only a content change moves the text a semantic index is built from;
+        // pinning a note does not.
+        if ($touchesDocument) {
+            $this->queueEmbedding($identity, $noteId);
+        }
+
+        return $updated;
     }
 
     /**
