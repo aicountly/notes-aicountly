@@ -240,9 +240,14 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
       key: 'voice',
       label: 'Record a voice note',
       icon: 'mic',
-      // Both have to be true: a deployment that transcribes, and a browser that
-      // can record at all. Either missing and there is no button to press.
-      available: canTranscribe && isVoiceRecordingSupported(),
+      // Only the browser's capability decides. Transcription is what happens
+      // to a recording *after* it is stored, and the server never required its
+      // flag to accept one — `POST /notes/{id}/attachments` asks for no
+      // feature at all, and the transcription job reports `skipped` where
+      // there is no engine. Gating the button on it removed a working way to
+      // capture a thought, and left a phone with a microphone showing nothing
+      // to press.
+      available: isVoiceRecordingSupported(),
       run: () => {
         setError(null)
         setCapture('voice')
@@ -252,7 +257,8 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
       key: 'scan',
       label: 'Scan a document',
       icon: 'scan',
-      available: canScan,
+      // Likewise: scanning stores images. OCR is what reads them afterwards.
+      available: true,
       run: () => {
         setError(null)
         setCapture('scan')
@@ -416,7 +422,11 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
         open={capture === 'voice'}
         onClose={closeCapture}
         title="Record a voice note"
-        description="The recording is saved as a new note when you finish."
+        description={
+          canTranscribe
+            ? 'The recording is saved as a new note when you finish, and transcribed.'
+            : 'The recording is saved as a new note when you finish. This deployment has no transcription engine, so it is kept as audio and not turned into text.'
+        }
         width={560}
       >
         <VoiceRecorder
@@ -429,7 +439,11 @@ export function QuickCapture({ notebookId = null, inputRef }: QuickCaptureProps)
         open={capture === 'scan'}
         onClose={closeCapture}
         title="Scan a document"
-        description="Capture each page, straighten it, then save them all as one note."
+        description={
+          canScan
+            ? 'Capture each page, straighten it, then save them all as one note. The text is read so you can search it.'
+            : 'Capture each page, straighten it, then save them all as one note. This deployment has no text-recognition engine, so the pages are kept as images and their text is not searchable.'
+        }
         width={720}
       >
         <DocumentScanner

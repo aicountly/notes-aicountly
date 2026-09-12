@@ -107,20 +107,22 @@ describe('QuickCapture', () => {
     expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
   })
 
-  it('hides the shortcuts this deployment cannot honour', async () => {
+  it('hides only what this browser cannot do', async () => {
     const user = userEvent.setup()
     renderComposer()
 
     await user.click(screen.getByLabelText('Note'))
 
     expect(screen.getByRole('button', { name: 'New checklist' })).toBeInTheDocument()
+    // No microphone API, so there is genuinely nothing to press.
     expect(screen.queryByRole('button', { name: 'Record a voice note' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Scan a document' })).not.toBeInTheDocument()
+    // Scanning stores images. OCR is what reads them afterwards, and the
+    // server has never required its flag to accept a file — hiding this
+    // removed a working way to capture a document.
+    expect(screen.getByRole('button', { name: 'Scan a document' })).toBeInTheDocument()
   })
 
-  it('offers the shortcuts this deployment does have', async () => {
-    features.transcription = true
-    features.ocr = true
+  it('offers recording as soon as the browser can record, flag or no flag', async () => {
     grantRecordingSupport()
     const user = userEvent.setup()
     renderComposer()
@@ -129,6 +131,19 @@ describe('QuickCapture', () => {
 
     expect(screen.getByRole('button', { name: 'Record a voice note' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Scan a document' })).toBeInTheDocument()
+  })
+
+  it('says what will happen to a recording this deployment cannot transcribe', async () => {
+    grantRecordingSupport()
+    const user = userEvent.setup()
+    renderComposer()
+
+    await user.click(screen.getByLabelText('Note'))
+    await user.click(screen.getByRole('button', { name: 'Record a voice note' }))
+
+    // The promise is narrowed rather than the button removed: the audio is
+    // kept, it is simply not turned into text.
+    expect(await screen.findByText(/not turned into text/)).toBeInTheDocument()
   })
 
   it('does not offer recording in a browser that cannot record', async () => {

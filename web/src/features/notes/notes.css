@@ -419,3 +419,48 @@ ul.notes-list { list-style: none; margin: 0; padding: 0; }
 .picker-option[aria-pressed='true'] { background: var(--notes-primary-soft); font-weight: 600; }
 .picker-option__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .picker-option__depth { flex-shrink: 0; }
+
+/* --- Tags, editable from the info panel ----------------------------------- */
+
+.info-tags {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+  align-items: flex-start;
+}
+
+.info-tags__empty { color: var(--notes-text-tertiary); }
+
+/* Sized to the row it sits in rather than the panel: a full-width input here
+   reads as a search box, which this is not. */
+.info-tags__input {
+  width: 12rem;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-xs);
+}
+
+.info-tags__input:focus-visible {
+  outline: 2px solid var(--notes-focus-ring);
+  outline-offset: 1px;
+}
+
+.note-tag__remove {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.note-tag__remove:hover { opacity: 1; }
+
+.note-tag__remove:disabled { cursor: default; opacity: 0.3; }

@@ -326,6 +326,20 @@ final class ShareService
             throw ApiException::validation(['user_id' => 'Choose someone to share this note with.']);
         }
 
+        // An email address is refused rather than stored. This API has no
+        // directory to resolve one against — there is no portal endpoint that
+        // turns an address into an account id, and inventing a lookup would be
+        // inventing a service. Stored as-is it becomes a grant whose `user_id`
+        // matches nobody: a name in the sharing dialog, a row in the table, and
+        // no access for the person it names, discovered only when they say they
+        // cannot see the note. Refusing says which value is wanted while the
+        // sharer is still looking at the field.
+        if (str_contains($userId, '@')) {
+            throw ApiException::validation([
+                'user_id' => 'Share with an AICOUNTLY account id. An email address cannot be looked up from here.',
+            ]);
+        }
+
         return $userId;
     }
 

@@ -12,8 +12,8 @@ rather than left for someone to discover.
 
 | Suite | Result |
 |---|---|
-| Backend (`server-php/tests/run.php`) | 536 tests, 2465 assertions, 0 failures |
-| Frontend unit (`vitest`) | 40 files, 376 tests |
+| Backend (`server-php/tests/run.php`) | 553 tests, 2532 assertions, 0 failures |
+| Frontend unit (`vitest`) | 43 files, 386 tests |
 | Browser (`playwright`) | 16 tests, desktop + phone viewports |
 | Types (`tsc -b`) | clean |
 | Migrations | apply from an empty database; `0008_pgvector` records itself *skipped* where the extension is absent |
@@ -66,25 +66,25 @@ are listed separately as **unverified** — they are leads, not conclusions.
 | `.env.example` naming `NOTES_OCR_URL`, which nothing reads | `server-php/.env.example` |
 | Every uploaded image rendered as a broken icon: the document stores a Bearer-only URL and an `<img>` sends no such header | `extensions/image.ts`, `useImageSrcLoader` |
 | The notebook picker flattened the shared `['notebooks']` cache, so the sidebar tree lost its children — or the picker lost its nesting, depending which mounted first | `useSearch.ts` |
+| Attachment links in the Info panel opened a 401 JSON envelope rather than the file | `NoteInfoPanel.tsx` |
+| The Share dialog invited by email; the API stored the string as a user id and the grant matched nobody | `ShareDialog.tsx`, `ShareService.php` |
+| Duplicating a note shared with you 404'd about a notebook you were never told about | `NotesService::duplicate` |
+| `GET /notes` paged every sort with an `(updated_at, id)` keyset, repeating and skipping rows — and truncated the cursor to milliseconds, skipping notes written in the same millisecond even on the default sort | `NoteRepository.php` |
+| Two concurrent saves could both succeed, the second overwriting the first with no conflict | `NotesService::update` |
+| `note_embeddings` had no writer, so semantic search could only ever answer `keyword_fallback` | `EmbeddingHandler`, migration `0010` |
+| Offline pin/archive/favourite was queued but never written to the device cache, so it visibly undid itself | `useNotes.ts` |
+| The service worker cached any navigation response — a 5xx error page included — as the offline shell | `sw.js` |
+| `extractText` joined text nodes with a space, indexing a bolded word as `Ai count ly` | `NoteDocument.php` |
+| Voice recording and scanning were hidden behind flags the server never required to accept a file | `QuickCapture.tsx` |
+| Help described a tag field that existed nowhere — a note's tags could be read and not changed | `NoteInfoPanel.tsx`, `HelpPage.tsx` |
 
 ### Open findings
 
-Confirmed by the verify pass and **not yet fixed**. Ordered by severity. Both
-findings the audit rated *high* have since been closed and moved above.
+Confirmed by the verify pass and **not yet fixed**. Everything the audit rated
+*high* or *medium* has since been closed and moved above; these three remain.
 
 | Sev | Finding | Where |
 |---|---|---|
-| Medium | Attachment links in the Info panel open a 401 JSON envelope rather than the file | `NoteInfoPanel.tsx:166` |
-| Medium | The Share dialog invites by email address; the API stores the string as a user id and the grant never matches anyone | `ShareDialog.tsx:165` |
-| Medium | Duplicating a note shared with you 404s about a notebook you were never told about | `NotesService.php:449` |
-| Medium | `GET /notes` returns an `(updated_at, id)` keyset cursor for sorts not ordered by `updated_at`, so paging repeats and skips rows | `NoteRepository.php:74` |
-| Medium | The optimistic-concurrency check reads the version outside the transaction with no version predicate on the UPDATE, so two concurrent saves can both succeed | `NotesService.php:207` |
-| Medium | `note_embeddings` has no writer, so semantic search can only ever answer `keyword_fallback` while reporting itself enabled | `NotesSearchService.php:383` |
-| Medium | Offline pin/archive/favourite is queued but not written to the device cache, so the change visibly undoes itself | `useNotes.ts:299` |
-| Medium | The service worker caches any navigation response — including a 5xx error page — as the offline shell | `sw.js:62` |
-| Medium | `extractText` joins sibling text nodes with a space, so a word split by a mark boundary is indexed with a space inside it | `NoteDocument.php:373` |
-| Medium | Voice recording and document scanning are hidden behind flags the server does not require | `QuickCapture.tsx:245` |
-| Medium | Help documents a tag field on a note; no screen adds or removes a tag on a note | `HelpPage.tsx:160` |
 | Low | The sidebar Trash badge counts other people's trashed notes that the Trash list then refuses to show | `NoteRepository.php:296` |
 | Low | `notes.extracted_text` is uncapped while `search_vector` is a generated `tsvector`, so a document under the 4 MB limit can make every write to that note fail | `0001_core_notes.sql:96` |
 | Low | The link dialog accepts `/`-relative hrefs that the server silently deletes on save | `EditorDialogs.tsx:16` |
@@ -124,4 +124,8 @@ not as defects.
 - **Drive still lists Notes as *Future*.** Recording it as *Implemented,
   opt-in* is a change in `drive-react-app`, not here.
 - **Semantic search and inline AI need a model gateway** that is not part of
-  this repository. Both flags stay off until one is configured.
+  this repository. Both flags stay off until one is configured — and the flag
+  now genuinely requires it: `Features::REQUIRES_ENV` lists `PULSE_API_URL`
+  against semantic search, so switching it on without a gateway leaves the
+  feature off rather than half on. With one configured, notes are chunked and
+  embedded by the `note.embedding` job as they are saved.

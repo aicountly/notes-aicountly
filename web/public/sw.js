@@ -58,8 +58,17 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          void caches.open(VERSION).then((cache) => cache.put('/index.html', copy))
+          // Only a real shell is kept. Any navigation response used to be
+          // stored under /index.html, so one 502 from the origin — a deploy
+          // mid-flight, a proxy hiccup — replaced the offline shell with the
+          // error page, and every later offline visit rendered that instead of
+          // the app, until a successful navigation happened to overwrite it.
+          // `basic` excludes opaque and redirected responses for the same
+          // reason: neither is the document this app serves.
+          if (response.ok && response.type === 'basic') {
+            const copy = response.clone()
+            void caches.open(VERSION).then((cache) => cache.put('/index.html', copy))
+          }
           return response
         })
         .catch(() => caches.match('/index.html').then((cached) => cached ?? Response.error())),

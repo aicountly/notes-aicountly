@@ -11,6 +11,7 @@
  * a broken one.
  */
 
+import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -20,7 +21,8 @@ import { Button, Skeleton } from '../../../shared/ui/primitives'
 import { ApiError, api } from '../../../shared/api/client'
 import { queryKeys } from '../../../shared/query/queryClient'
 import { useAuth } from '../../../auth/AuthProvider'
-import { attachmentContentUrl } from '../../attachments/hooks/useAttachments'
+import { downloadAttachment } from '../../attachments/hooks/useAttachments'
+import { useUpdateNote } from '../hooks/useNotes'
 import { formatAbsoluteTime, formatRelativeTime } from './NoteCard'
 import type {
   ActivityEntry,
@@ -55,6 +57,96 @@ const ACTIVITY_VERB: Record<string, string> = {
 
 function flattenNotebooks(notebooks: Notebook[]): Notebook[] {
   return notebooks.flatMap((notebook) => [notebook, ...flattenNotebooks(notebook.children ?? [])])
+}
+
+/**
+ * Add and remove a note's tags.
+ *
+ * Help has described "the tag field on a note" since the first draft and there
+ * was no such field anywhere — tags could be read here and created only by the
+ * server, which made the documentation a promise the app did not keep. The API
+ * has always taken `tags` on `PATCH /notes/{id}`: it is the whole list, so a
+ * removal is the same call as an addition with one name fewer.
+ *
+ * Names are sent as typed. `#gst` and `gst` are the same tag, and the server
+ * lowercases and slugs them, so nothing here needs to know the rules — it
+ * strips a leading `#` only so the list does not show two entries that look
+ * identical to a reader.
+ */
+function NoteTagEditor({ note }: { note: Note }) {
+  const update = useUpdateNote()
+  const [draft, setDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const canEdit = note.capabilities.edit
+
+  const names = note.tags.map((tag) => tag.name)
+
+  const save = async (next: string[]): Promise<void> => {
+    setError(null)
+    try {
+      await update.mutateAsync({ id: note.id, tags: next })
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'That tag could not be saved.')
+    }
+  }
+
+  const add = (): void => {
+    const name = draft.trim().replace(/^#+/, '').trim()
+    setDraft('')
+    if (name === '') return
+    // Case-insensitively already there: adding it again would be a no-op the
+    // server would have to undo, and a flash of a duplicate here.
+    if (names.some((existing) => existing.toLowerCase() === name.toLowerCase())) return
+    void save([...names, name])
+  }
+
+  return (
+    <div className="info-tags">
+      <span className="note-card__tags">
+        {names.length === 0 ? <span className="info-tags__empty">None</span> : null}
+        {note.tags.map((tag) => (
+          <span key={tag.id} className="note-tag">
+            {tag.name}
+            {canEdit ? (
+              <button
+                type="button"
+                className="note-tag__remove"
+                onClick={() => void save(names.filter((name) => name !== tag.name))}
+                disabled={update.isPending}
+                aria-label={`Remove tag ${tag.name}`}
+              >
+                <Icon name="close" size={10} />
+              </button>
+            ) : null}
+          </span>
+        ))}
+      </span>
+
+      {canEdit ? (
+        <input
+          className="info-tags__input"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={add}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ',') {
+              event.preventDefault()
+              add()
+            }
+          }}
+          placeholder="Add a tag"
+          aria-label="Add a tag"
+          disabled={update.isPending}
+        />
+      ) : null}
+
+      {error ? (
+        <p className="info-empty" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
 }
 
 export interface NoteInfoPanelProps {
@@ -99,6 +191,25 @@ export function NoteInfoPanel({ note, onClose }: NoteInfoPanelProps) {
     staleTime: 60_000,
   })
 
+  // Downloading is not instant — the bytes come through this app, with the
+  // session attached — so the row says it is working, and says so if it fails.
+  const [busyAttachment, setBusyAttachment] = useState<string | null>(null)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+
+  const openAttachment = async (attachment: Attachment): Promise<void> => {
+    setAttachmentError(null)
+    setBusyAttachment(attachment.id)
+    try {
+      await downloadAttachment(attachment)
+    } catch (error) {
+      setAttachmentError(
+        error instanceof ApiError ? error.message : 'That file could not be opened.',
+      )
+    } finally {
+      setBusyAttachment(null)
+    }
+  }
+
   const notebook = note.notebook_id
     ? flattenNotebooks(notebooks.data ?? []).find((candidate) => candidate.id === note.notebook_id)
     : undefined
@@ -129,17 +240,7 @@ export function NoteInfoPanel({ note, onClose }: NoteInfoPanelProps) {
             {note.notebook_id === null ? 'None' : (notebook?.name ?? 'A notebook you cannot open')}
           </InfoRow>
           <InfoRow label="Tags">
-            {note.tags.length === 0 ? (
-              'None'
-            ) : (
-              <span className="note-card__tags">
-                {note.tags.map((tag) => (
-                  <span key={tag.id} className="note-tag">
-                    {tag.name}
-                  </span>
-                ))}
-              </span>
-            )}
+            <NoteTagEditor note={note} />
           </InfoRow>
           <InfoRow label="Length">
             {note.word_count.toLocaleString()} words · {note.char_count.toLocaleString()} characters
@@ -158,22 +259,32 @@ export function NoteInfoPanel({ note, onClose }: NoteInfoPanelProps) {
             <ul className="info-list">
               {(attachments.data ?? []).map((attachment) => (
                 <li key={attachment.id}>
-                  {/* `content_url` is relative to the API root, not to this
-                      origin: linked raw it lands on the SPA's catch-all route
-                      instead of the file. */}
-                  <a
+                  {/* A button, not a link, and that is not a style choice.
+                      The content endpoint is behind the session's Bearer
+                      token, which a browser navigation does not send — an
+                      `<a href>` to it opened a 401 JSON envelope in a new tab
+                      rather than the file. `downloadAttachment` fetches the
+                      bytes with the session attached and hands them to the
+                      browser as a save. */}
+                  <button
+                    type="button"
                     className="info-link"
-                    href={attachmentContentUrl(attachment)}
-                    target="_blank"
-                    rel="noreferrer"
+                    onClick={() => void openAttachment(attachment)}
+                    disabled={busyAttachment === attachment.id}
+                    aria-busy={busyAttachment === attachment.id}
                   >
                     <Icon name="attach" size={14} />
                     <span className="info-link__label">{attachment.filename}</span>
-                  </a>
+                  </button>
                 </li>
               ))}
             </ul>
           )}
+          {attachmentError ? (
+            <p className="info-empty" role="alert">
+              {attachmentError}
+            </p>
+          ) : null}
         </section>
 
         <section className="info-section">

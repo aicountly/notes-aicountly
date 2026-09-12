@@ -162,7 +162,7 @@ export function ShareDialog({ note, open, onClose }: ShareDialogProps) {
           >
             <div className="org-field">
               <label className="org-label" htmlFor={personId}>
-                AICOUNTLY account id or email
+                AICOUNTLY account id
               </label>
               <input
                 id={personId}

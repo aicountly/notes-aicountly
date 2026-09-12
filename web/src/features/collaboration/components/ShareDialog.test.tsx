@@ -152,14 +152,14 @@ describe('ShareDialog', () => {
     const user = userEvent.setup()
     renderDialog()
 
-    await user.type(await screen.findByLabelText('AICOUNTLY account id or email'), 'sam@example.com')
+    await user.type(await screen.findByLabelText('AICOUNTLY account id'), 'u_sam')
     await user.selectOptions(screen.getByLabelText('Access'), 'editor')
     await user.click(screen.getByRole('button', { name: 'Share' }))
 
     await waitFor(() => expect(writes()).toHaveLength(1))
     expect(writes()[0]).toMatchObject({
       method: 'POST',
-      body: { user_id: 'sam@example.com', role: 'editor' },
+      body: { user_id: 'u_sam', role: 'editor' },
     })
   })
 
@@ -199,7 +199,7 @@ describe('ShareDialog', () => {
     )
 
     expect(await screen.findByText(/Only the owner can change who this note is shared with/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('AICOUNTLY account id or email')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('AICOUNTLY account id')).not.toBeInTheDocument()
     // Everyone who can open the note can still see who else is in it.
     expect(await screen.findByText('u_priya')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Remove u_priya' })).not.toBeInTheDocument()
@@ -224,7 +224,7 @@ describe('ShareDialog', () => {
 
     renderDialog()
 
-    await user.type(await screen.findByLabelText('AICOUNTLY account id or email'), 'u_me')
+    await user.type(await screen.findByLabelText('AICOUNTLY account id'), 'u_me')
     await user.click(screen.getByRole('button', { name: 'Share' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('You already have access to this note.')

@@ -285,6 +285,21 @@ type FlagAction =
  * not re-render the whole list; the cache is patched in place and rolled back
  * if the server disagrees.
  */
+/**
+ * What each flag action changes, for the optimistic patch and for the device
+ * cache alike — one table, because those two disagreeing is what made an
+ * offline pin undo itself.
+ */
+const FLAG_PATCHES: Record<FlagAction, Partial<NoteSummary>> = {
+  pin: { is_pinned: true },
+  unpin: { is_pinned: false },
+  favourite: { is_favourite: true },
+  unfavourite: { is_favourite: false },
+  archive: { is_archived: true },
+  unarchive: { is_archived: false },
+  restore: { deleted_at: null },
+}
+
 export function useNoteFlag() {
   const client = useQueryClient()
 
@@ -296,7 +311,14 @@ export function useNoteFlag() {
         if (error instanceof ApiError && error.isOffline && action !== 'restore') {
           await syncQueue.enqueue(`note.${action}` as never, 'note', id, {})
           await refreshPendingCount()
-          const local = await localNoteStore.get(id)
+
+          // Written to the device cache, not just queued. The optimistic patch
+          // lives in the query cache, and the invalidation that follows a
+          // settled mutation refetches from the device while offline — so a
+          // cache that still said `is_pinned: false` put the pin straight back
+          // where it was, a second after the user pressed it, with nothing to
+          // explain why.
+          const local = await localNoteStore.markDirty(id, FLAG_PATCHES[action])
           if (local) return local as Note
         }
         throw error
@@ -306,15 +328,7 @@ export function useNoteFlag() {
       await client.cancelQueries({ queryKey: queryKeys.notes.detail(id) })
       const previous = client.getQueryData<Note>(queryKeys.notes.detail(id))
 
-      const patch: Partial<NoteSummary> = {
-        pin: { is_pinned: true },
-        unpin: { is_pinned: false },
-        favourite: { is_favourite: true },
-        unfavourite: { is_favourite: false },
-        archive: { is_archived: true },
-        unarchive: { is_archived: false },
-        restore: { deleted_at: null },
-      }[action]
+      const patch = FLAG_PATCHES[action]
 
       if (previous) {
         client.setQueryData<Note>(queryKeys.notes.detail(id), { ...previous, ...patch })

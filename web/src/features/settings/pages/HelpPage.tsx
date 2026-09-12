@@ -157,8 +157,9 @@ export default function HelpPage() {
 
             <Explainer icon="tag" title="Tags">
               <p>
-                Tags are added from the tag field on a note, with or without the <code>#</code> — typing{' '}
-                <code>#gst</code> and typing <code>gst</code> reach the same tag. They are case-insensitive, so
+                Tags are added from the tag field in a note’s info panel — the <strong>i</strong> button above
+                the note — with or without the <code>#</code>: typing <code>#gst</code> and typing{' '}
+                <code>gst</code> reach the same tag. They are case-insensitive, so
                 “GST” and “gst” are one tag and not two, and every tag you use appears in the sidebar as a way
                 back to the notes carrying it.
               </p>
