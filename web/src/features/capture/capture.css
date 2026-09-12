@@ -1,0 +1,241 @@
+/* ---------------------------------------------------------------------------
+ * Capture: the microphone and the camera.
+ *
+ * Both panels live inside a dialog, so they size to their content and let the
+ * dialog scroll rather than growing their own scroll areas. The camera and the
+ * level meter are the only two places in the app with a black-ish stage, and
+ * even that comes from a token — a hard #000 would look like a hole punched in
+ * the light theme.
+ * ------------------------------------------------------------------------- */
+
+.voice,
+.scan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-4);
+}
+
+/* --- Level meter and clock ---------------------------------------------- */
+
+.voice__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-4);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-secondary);
+}
+
+/* `color` is what the canvas reads with getComputedStyle to draw the bars, so
+   the meter follows the theme without a second palette in the JavaScript. */
+.voice__meter {
+  width: 100%;
+  max-width: 480px;
+  height: 64px;
+  color: var(--notes-border-strong);
+}
+
+.voice__meter--live { color: var(--notes-primary); }
+
+.voice__clock {
+  display: flex;
+  align-items: baseline;
+  gap: var(--notes-space-2);
+  margin: 0;
+  font-family: var(--notes-font-mono);
+  font-size: var(--notes-text-2xl);
+  font-variant-numeric: tabular-nums;
+  color: var(--notes-text-primary);
+}
+
+.voice__paused-flag {
+  font-family: var(--notes-font-sans);
+  font-size: var(--notes-text-xs);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--notes-warning);
+}
+
+/* --- Notices ------------------------------------------------------------ */
+
+.voice__notice,
+.scan__notice,
+.cam__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: var(--notes-space-3);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-danger-soft);
+  color: var(--notes-danger);
+  font-size: var(--notes-text-sm);
+}
+
+.voice__notice--info,
+.scan__notice--info {
+  background: var(--notes-info-soft);
+  color: var(--notes-info);
+}
+
+.scan__notice--danger { background: var(--notes-danger-soft); color: var(--notes-danger); }
+
+.voice__notice svg,
+.scan__notice svg,
+.cam__notice svg { flex-shrink: 0; margin-top: 1px; }
+
+/* --- Playback ----------------------------------------------------------- */
+
+.voice__playback { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.voice__playback-label {
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+  color: var(--notes-text-secondary);
+}
+
+.voice__audio { width: 100%; }
+
+/* --- Action bars -------------------------------------------------------- */
+
+.voice__bar,
+.scan__bar,
+.cam__bar,
+.cam__blocked-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  flex-wrap: wrap;
+}
+
+.voice__spacer,
+.scan__spacer { flex: 1; }
+
+/* --- Camera ------------------------------------------------------------- */
+
+.cam { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+
+.cam__stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-overlay);
+  overflow: hidden;
+}
+
+.cam__video { width: 100%; max-height: 46vh; object-fit: contain; }
+
+.cam__starting {
+  position: absolute;
+  margin: 0;
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-inverse);
+}
+
+.cam--blocked { gap: var(--notes-space-3); }
+
+/* --- Scanner tray ------------------------------------------------------- */
+
+.scan__tray { display: flex; flex-direction: column; }
+
+.scan__pages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+}
+
+.scan-page {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-2);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+}
+
+.scan-page__thumb {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: var(--notes-radius-sm);
+  border: 1px solid var(--notes-border);
+  background: var(--notes-surface-secondary);
+}
+
+.scan-page__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--notes-space-1); }
+.scan-page__title { margin: 0; font-size: var(--notes-text-sm); font-weight: 600; color: var(--notes-text-primary); }
+.scan-page__meta { margin: 0; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+.scan-page__actions { display: flex; align-items: center; gap: var(--notes-space-1); flex-wrap: wrap; }
+
+/* --- Crop editor -------------------------------------------------------- */
+
+.scan-crop { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+
+.scan-crop__hint { margin: 0; font-size: var(--notes-text-sm); color: var(--notes-text-secondary); }
+
+.scan-crop__surface {
+  position: relative;
+  align-self: center;
+  max-width: 100%;
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-secondary);
+  overflow: hidden;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.scan-crop__image { display: block; max-width: 100%; max-height: 46vh; user-select: none; }
+
+/* The dimmed surround is what makes the selection readable on a light page.
+   The border keeps the shape visible for anyone who cannot see the dimming. */
+.scan-crop__rect {
+  position: absolute;
+  border: 2px solid var(--notes-primary);
+  background: transparent;
+  box-shadow: 0 0 0 9999px var(--notes-overlay);
+  pointer-events: none;
+}
+
+.scan-crop__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--notes-space-2);
+}
+
+.scan-crop__field { display: flex; flex-direction: column; gap: var(--notes-space-1); }
+
+.scan-crop__field label {
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  color: var(--notes-text-secondary);
+}
+
+.scan-crop__field input {
+  height: 32px;
+  padding: 0 var(--notes-space-2);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font: inherit;
+  font-size: var(--notes-text-sm);
+}
+
+.scan-crop__field input:focus-visible {
+  outline: 2px solid var(--notes-focus-ring);
+  outline-offset: 1px;
+  border-color: var(--notes-focus-ring);
+}
+
+.scan-crop__actions { display: flex; align-items: center; gap: var(--notes-space-2); }

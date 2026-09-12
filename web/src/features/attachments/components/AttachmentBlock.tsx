@@ -1,0 +1,455 @@
+/**
+ * One attachment, as a row.
+ *
+ * The row has to answer three questions at a glance — what is this file, is it
+ * safe to look at yet, and what can I do with it — and it answers the second
+ * one honestly:
+ *
+ *   - An image is shown. A PDF is shown *on request*, because loading a 30-page
+ *     document into every row of a list is not a preview, it is a download with
+ *     extra steps.
+ *   - Nothing arbitrary is ever rendered inline: the server refuses HTML and
+ *     SVG uploads outright, and this keeps an allowlist of its own so a future
+ *     server relaxation cannot quietly turn this component into one that runs
+ *     someone else's markup. Everything outside that allowlist is offered as a
+ *     download and nothing else.
+ *   - Processing state is named after the job that is running, and when the
+ *     deployment cannot run that job at all the row says so instead of showing
+ *     a spinner that will never resolve.
+ *
+ * Every path to the bytes goes through `useAttachments`, never through a raw
+ * `content_url`: that endpoint wants the session's Bearer token, which a
+ * browser does not attach to an `<img>`, an `<object>` or a link. See
+ * `fetchBytes` there for the whole reason this component holds object URLs
+ * rather than hrefs.
+ */
+
+import { useEffect, useId, useRef, useState } from 'react'
+import type { RefObject } from 'react'
+
+import { ApiError } from '../../../shared/api/client'
+import { Icon } from '../../../shared/ui/Icon'
+import type { IconName } from '../../../shared/ui/Icon'
+import { Button, Skeleton, Spinner } from '../../../shared/ui/primitives'
+import type { Attachment, AttachmentKind } from '../../../shared/api/types'
+import { downloadAttachment, formatBytes, useAttachmentObjectUrl } from '../hooks/useAttachments'
+import type { PendingUpload } from '../hooks/useAttachments'
+import '../attachments.css'
+
+const KIND_ICONS: Record<AttachmentKind, IconName> = {
+  image: 'image',
+  pdf: 'file',
+  audio: 'mic',
+  video: 'play',
+  document: 'note',
+  spreadsheet: 'table',
+  presentation: 'grid',
+  text: 'note',
+  file: 'file',
+}
+
+const KIND_LABELS: Record<AttachmentKind, string> = {
+  image: 'Image',
+  pdf: 'PDF',
+  audio: 'Audio',
+  video: 'Video',
+  document: 'Document',
+  spreadsheet: 'Spreadsheet',
+  presentation: 'Presentation',
+  text: 'Text file',
+  file: 'File',
+}
+
+/**
+ * Types this component will put in the page itself.
+ *
+ * An allowlist, not a blocklist, and it contains no markup format on purpose.
+ * `text/html`, `image/svg+xml` and friends are documents with scripts in them;
+ * rendering one from this origin would run it with the app's own privileges.
+ */
+const INLINE_IMAGE_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/avif',
+])
+
+function canShowImage(attachment: Attachment): boolean {
+  return attachment.kind === 'image' && INLINE_IMAGE_TYPES.has(attachment.mime_type)
+}
+
+function canShowPdf(attachment: Attachment): boolean {
+  return attachment.kind === 'pdf' && attachment.mime_type === 'application/pdf'
+}
+
+export function formatDuration(seconds: number): string {
+  const whole = Math.max(0, Math.round(seconds))
+  const minutes = Math.floor(whole / 60)
+  const rest = whole % 60
+  return `${minutes}:${String(rest).padStart(2, '0')}`
+}
+
+/** The job the server runs for this kind of file, in words. */
+function processingVerb(kind: AttachmentKind): string {
+  if (kind === 'audio' || kind === 'video') return 'Transcribing…'
+  return 'Extracting text…'
+}
+
+/** Which flag has to be on for that job to be possible at all. */
+function requiredFeature(kind: AttachmentKind): 'transcription' | 'ocr' | null {
+  if (kind === 'audio' || kind === 'video') return 'transcription'
+  if (kind === 'image' || kind === 'pdf' || kind === 'text') return 'ocr'
+  return null
+}
+
+type StatusTone = 'busy' | 'ready' | 'failed' | 'muted'
+
+interface StatusLine {
+  tone: StatusTone
+  text: string
+  detail?: string
+}
+
+/**
+ * What to say about this file's state.
+ *
+ * Exported because it is the piece worth testing: the mapping from two server
+ * columns and a feature flag onto one sentence is where a "Transcribing…" that
+ * never finishes comes from.
+ */
+export function describeStatus(
+  attachment: Attachment,
+  features: { transcription: boolean; ocr: boolean },
+): StatusLine | null {
+  if (attachment.upload_status === 'failed') {
+    return { tone: 'failed', text: 'Upload failed' }
+  }
+  if (attachment.upload_status === 'pending' || attachment.upload_status === 'uploading') {
+    return { tone: 'busy', text: 'Uploading…' }
+  }
+
+  switch (attachment.processing_status) {
+    case 'queued':
+    case 'processing': {
+      const flag = requiredFeature(attachment.kind)
+      // A queued job on a deployment with the capability switched off is a
+      // spinner with no end. Say what is actually true instead.
+      if (flag === 'transcription' && !features.transcription) {
+        return { tone: 'muted', text: 'Transcription is not enabled on this deployment' }
+      }
+      if (flag === 'ocr' && !features.ocr) {
+        return { tone: 'muted', text: 'Text extraction is not enabled on this deployment' }
+      }
+      return { tone: 'busy', text: processingVerb(attachment.kind) }
+    }
+    case 'failed':
+      return {
+        tone: 'failed',
+        text: 'Couldn’t process',
+        detail: attachment.processing_error ?? undefined,
+      }
+    case 'completed':
+      return { tone: 'ready', text: 'Ready' }
+    case 'pending':
+    case 'skipped':
+    default:
+      // Nothing was queued for this kind of file. There is no state to report,
+      // and "Skipped" would read as a failure.
+      return null
+  }
+}
+
+/**
+ * True once this row has come near the viewport, and true forever after.
+ *
+ * The bytes are fetched by this app rather than by the browser, so `loading`
+ * on an `<img>` no longer defers anything — without a gate, opening a note with
+ * twenty photographs would download twenty photographs. Where there is no
+ * IntersectionObserver the answer is simply "yes", which is what an eagerly
+ * loaded `<img>` would have done anyway.
+ */
+function useHasBeenVisible(ref: RefObject<HTMLElement | null>): boolean {
+  const [seen, setSeen] = useState(() => typeof IntersectionObserver === 'undefined')
+
+  useEffect(() => {
+    if (seen) return undefined
+    const element = ref.current
+    if (!element) return undefined
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) setSeen(true)
+      },
+      // Start a little before the row arrives, so the picture is there by the
+      // time it is scrolled to rather than a beat afterwards.
+      { rootMargin: '250px' },
+    )
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref, seen])
+
+  return seen
+}
+
+export interface AttachmentBlockProps {
+  attachment: Attachment
+  features: { transcription: boolean; ocr: boolean }
+  /** From the note's `capabilities`; a viewer sees the file but cannot remove it. */
+  canDelete: boolean
+  onDelete?: (attachment: Attachment) => void
+  deleting?: boolean
+  /** Re-reads this note's attachments. Offered when processing failed. */
+  onCheckAgain?: () => void
+}
+
+export function AttachmentBlock({
+  attachment,
+  features,
+  canDelete,
+  onDelete,
+  deleting = false,
+  onCheckAgain,
+}: AttachmentBlockProps) {
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const previewId = useId()
+  const rowRef = useRef<HTMLLIElement>(null)
+  const visible = useHasBeenVisible(rowRef)
+
+  const status = describeStatus(attachment, features)
+  const showImage = canShowImage(attachment)
+  const showPdf = canShowPdf(attachment)
+
+  const image = useAttachmentObjectUrl(attachment, showImage && visible)
+  // Only once the user asks: a PDF is fetched in full to be shown.
+  const pdf = useAttachmentObjectUrl(attachment, showPdf && previewOpen)
+
+  const download = async () => {
+    setDownloading(true)
+    setDownloadError(null)
+    try {
+      await downloadAttachment(attachment)
+    } catch (error) {
+      setDownloadError(
+        error instanceof ApiError ? error.message : `${attachment.filename} could not be downloaded.`,
+      )
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  const meta = [
+    KIND_LABELS[attachment.kind],
+    formatBytes(attachment.byte_size),
+    attachment.duration_seconds !== null ? formatDuration(attachment.duration_seconds) : null,
+  ].filter((part): part is string => part !== null)
+
+  return (
+    <li className="att-block" ref={rowRef}>
+      <div className="att-block__row">
+        <span className="att-block__icon" aria-hidden>
+          <Icon name={KIND_ICONS[attachment.kind]} size={17} />
+        </span>
+
+        <div className="att-block__body">
+          {/* Plain text, not a link: the only address for these bytes needs a
+              header the browser will not send, so the Download control below
+              is the one thing that can actually reach them. */}
+          <p className="att-block__name">{attachment.filename}</p>
+          <p className="att-block__meta">
+            {meta.join(' · ')}
+            {attachment.drive_file_id ? ' · From Drive' : ''}
+          </p>
+
+          {status ? (
+            <p className={`att-status att-status--${status.tone}`}>
+              {status.tone === 'busy' ? <Spinner size={11} /> : null}
+              {status.tone === 'ready' ? <Icon name="check" size={13} /> : null}
+              {status.tone === 'failed' ? <Icon name="alert" size={13} /> : null}
+              <span>{status.text}</span>
+              {status.detail ? <span className="att-status__detail">{status.detail}</span> : null}
+              {status.tone === 'failed' && onCheckAgain ? (
+                <Button size="sm" variant="ghost" icon="refresh" onClick={onCheckAgain}>
+                  Check again
+                </Button>
+              ) : null}
+            </p>
+          ) : null}
+
+          {downloadError ? (
+            <p className="att-status att-status--failed" role="alert">
+              <Icon name="alert" size={13} />
+              <span>{downloadError}</span>
+            </p>
+          ) : null}
+        </div>
+
+        <div className="att-block__actions">
+          {showPdf ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={previewOpen ? 'chevron-down' : 'chevron-right'}
+              aria-expanded={previewOpen}
+              // Only while the panel exists: pointing at an absent id is a
+              // promise the accessibility tree cannot keep.
+              aria-controls={previewOpen ? previewId : undefined}
+              onClick={() => setPreviewOpen((open) => !open)}
+            >
+              Preview
+            </Button>
+          ) : null}
+
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="download"
+            loading={downloading}
+            aria-label={`Download ${attachment.filename}`}
+            onClick={() => void download()}
+          >
+            Download
+          </Button>
+
+          {canDelete && onDelete ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon="trash"
+              iconOnly
+              loading={deleting}
+              aria-label={`Remove ${attachment.filename}`}
+              onClick={() => onDelete(attachment)}
+            />
+          ) : null}
+        </div>
+      </div>
+
+      {showImage ? (
+        <div className="att-preview att-preview--image">
+          {image.url ? (
+            <img
+              src={image.url}
+              alt={attachment.filename}
+              decoding="async"
+              width={attachment.width ?? undefined}
+              height={attachment.height ?? undefined}
+            />
+          ) : image.error ? (
+            // Rendering nothing here would leave a blank strip under the row
+            // with no clue that anything was meant to be in it.
+            <p className="att-preview__fallback" role="status">
+              {image.error.message}
+            </p>
+          ) : (
+            <div className="att-preview__loading">
+              <Skeleton width="100%" height={160} radius={0} />
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {showPdf && previewOpen ? (
+        <div className="att-preview att-preview--pdf" id={previewId}>
+          {pdf.url ? (
+            <object data={pdf.url} type="application/pdf" aria-label={`Preview of ${attachment.filename}`}>
+              {/* Reached whenever the browser declines to embed a PDF — a
+                  mobile browser, or one with its PDF viewer switched off. */}
+              <p className="att-preview__fallback">
+                This browser cannot show the PDF here. Use Download above to read{' '}
+                {attachment.filename}.
+              </p>
+            </object>
+          ) : pdf.error ? (
+            <p className="att-preview__fallback" role="status">
+              {pdf.error.message}
+            </p>
+          ) : (
+            <p className="att-preview__fallback">
+              <Spinner size={13} /> <span>Loading {attachment.filename}…</span>
+            </p>
+          )}
+        </div>
+      ) : null}
+    </li>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// A file that has not reached the server yet
+// ---------------------------------------------------------------------------
+
+export interface PendingAttachmentBlockProps {
+  item: PendingUpload
+  onRetry: (key: string) => void
+  onDismiss: (key: string) => void
+}
+
+/**
+ * The same row, for a file still uploading.
+ *
+ * The bar is deliberately indeterminate. `api.upload` is built on `fetch`,
+ * which reports nothing until the request completes, so a percentage here
+ * would be a number this app invented — and a progress bar that lies is worse
+ * than one that only says "working".
+ */
+export function PendingAttachmentBlock({ item, onRetry, onDismiss }: PendingAttachmentBlockProps) {
+  const failed = item.error !== null
+
+  return (
+    <li className={`att-block att-block--pending ${failed ? 'att-block--failed' : ''}`.trim()}>
+      <div className="att-block__row">
+        <span className="att-block__icon" aria-hidden>
+          {item.previewUrl ? (
+            <img className="att-block__thumb" src={item.previewUrl} alt="" />
+          ) : (
+            <Icon name={KIND_ICONS[item.kind]} size={17} />
+          )}
+        </span>
+
+        <div className="att-block__body">
+          <p className="att-block__name">{item.filename}</p>
+          <p className="att-block__meta">{formatBytes(item.byteSize)}</p>
+
+          {failed ? (
+            <p className="att-status att-status--failed">
+              <Icon name="alert" size={13} />
+              <span>{item.error}</span>
+            </p>
+          ) : (
+            <>
+              <p className="att-status att-status--busy">
+                <Spinner size={11} />
+                <span>Uploading…</span>
+              </p>
+              <div
+                className="att-progress"
+                role="progressbar"
+                aria-label={`Uploading ${item.filename}`}
+              >
+                <span className="att-progress__bar" />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="att-block__actions">
+          {/* Only where sending it again could end differently. A file this app
+              refused on sight — empty, over the limit, a blocked extension —
+              would fail identically every time, so no button is offered. */}
+          {failed && item.retryable ? (
+            <Button size="sm" variant="ghost" icon="refresh" onClick={() => onRetry(item.key)}>
+              Try again
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="close"
+            iconOnly
+            aria-label={`Remove ${item.filename} from the queue`}
+            onClick={() => onDismiss(item.key)}
+          />
+        </div>
+      </div>
+    </li>
+  )
+}

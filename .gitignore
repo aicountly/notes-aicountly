@@ -41,3 +41,14 @@ Thumbs.db
 .eslintcache
 *.tsbuildinfo
 .cache/
+
+# Attachment bytes written by the local object store. These exist only on the
+# machine that wrote them and must never reach the repository — the deploy also
+# excludes storage/ from --delete so a release cannot erase them on the server.
+server-php/storage/
+
+# Playwright output
+test-results/
+playwright-report/
+blob-report/
+.playwright/

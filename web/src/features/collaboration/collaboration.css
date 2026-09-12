@@ -1,0 +1,308 @@
+/* ---------------------------------------------------------------------------
+ * Collaboration: sharing, comments, version history, links and activity.
+ *
+ * These four surfaces are the ones where a person is looking at *other
+ * people's* traces rather than their own writing, so they share one visual
+ * idea: a quiet stack of rows, the words first, the metadata second, and
+ * nothing that competes with the note beside them.
+ *
+ * Every value is a token from styles/tokens.css. Form fields, notices and
+ * skeleton rows come from features/organise/organise.css rather than being
+ * built a second time here.
+ * ------------------------------------------------------------------------- */
+
+/* --- Shared ---------------------------------------------------------------- */
+
+.collab-section { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+.collab-section + .collab-section { margin-top: var(--notes-space-5); }
+
+.collab-section__title {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  font-size: var(--notes-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--notes-text-tertiary);
+}
+
+.collab-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding-bottom: var(--notes-space-3);
+}
+
+/* An explanation of what the reader may not do, in place of a control that
+   would only fail on click. */
+.collab-note {
+  margin: 0;
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+}
+.collab-note--muted { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+.collab-skeletons { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+.collab-skeleton-row { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.collab-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--notes-space-2); }
+.collab-actions--end { justify-content: flex-end; }
+
+/* --- Sharing --------------------------------------------------------------- */
+
+.collab-share-form { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+
+/* One line each, so nobody has to guess what "commenter" grants. */
+.collab-roles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.collab-roles li { font-size: var(--notes-text-xs); color: var(--notes-text-secondary); }
+.collab-roles b { font-weight: 650; color: var(--notes-text-primary); }
+
+.collab-members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+
+.collab-member {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) 0;
+  border-top: 1px solid var(--notes-border);
+}
+.collab-member:first-child { border-top: 0; }
+
+.collab-member__body { flex: 1; min-width: 0; }
+.collab-member__name {
+  display: block;
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collab-member__meta { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+.collab-member__role { width: 148px; flex-shrink: 0; }
+
+.collab-link-row {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+}
+.collab-link-row__url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--notes-font-mono);
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-secondary);
+}
+
+/* --- Comments -------------------------------------------------------------- */
+
+.collab-filter {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface-secondary);
+}
+
+.collab-filter__option {
+  padding: 3px var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-pill);
+  background: transparent;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  cursor: pointer;
+}
+.collab-filter__option:hover { color: var(--notes-text-primary); }
+/* Weight and surface, not hue: the selected filter must read in greyscale. */
+.collab-filter__option[aria-pressed='true'] {
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font-weight: 650;
+  box-shadow: var(--notes-shadow-xs);
+}
+
+.collab-threads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-3); }
+
+.collab-thread {
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+}
+.collab-thread--resolved { background: var(--notes-surface-secondary); }
+/* The thread anchored to the block the caret is in. */
+.collab-thread--active { border-color: var(--notes-primary-border); box-shadow: 0 0 0 1px var(--notes-primary-border); }
+
+.collab-thread__anchor {
+  margin: 0 0 var(--notes-space-2);
+  padding-left: var(--notes-space-2);
+  border-left: 2px solid var(--notes-primary-border);
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* A comment whose anchor was edited away. Never dropped — it is somebody's
+   words about a paragraph that changed under them. */
+.collab-thread__orphan {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-1);
+  margin: 0 0 var(--notes-space-2);
+  font-size: var(--notes-text-xs);
+  color: var(--notes-warning);
+}
+
+.collab-comment + .collab-comment { margin-top: var(--notes-space-3); }
+.collab-comment__head { display: flex; align-items: baseline; gap: var(--notes-space-2); }
+.collab-comment__author { font-size: var(--notes-text-sm); font-weight: 650; }
+.collab-comment__time { margin-left: auto; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+.collab-comment__edited { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+.collab-comment__body {
+  margin: var(--notes-space-1) 0 0;
+  font-size: var(--notes-text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.collab-replies {
+  list-style: none;
+  margin: var(--notes-space-3) 0 0;
+  padding: 0 0 0 var(--notes-space-3);
+  border-left: 2px solid var(--notes-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-3);
+}
+
+.collab-composer { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+.collab-composer--reply { margin-top: var(--notes-space-3); }
+
+.collab-panel__footer {
+  padding: var(--notes-space-3) var(--notes-space-4);
+  border-top: 1px solid var(--notes-border);
+  background: var(--notes-surface);
+}
+
+/* --- Version history ------------------------------------------------------- */
+
+.collab-versions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.collab-version {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--notes-radius-sm);
+  background: transparent;
+  color: var(--notes-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.collab-version:hover { background: var(--notes-surface-hover); }
+
+.collab-version__label { font-size: var(--notes-text-sm); }
+.collab-version__meta { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+.collab-preview {
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+  max-height: 44vh;
+  overflow-y: auto;
+}
+.collab-preview__title { margin: 0 0 var(--notes-space-2); font-size: var(--notes-text-md); font-weight: 650; }
+.collab-preview__block { margin: 0 0 var(--notes-space-2); font-size: var(--notes-text-sm); line-height: 1.55; overflow-wrap: anywhere; }
+.collab-preview__block--heading { font-weight: 650; font-size: var(--notes-text-base); }
+.collab-preview__block--quote { padding-left: var(--notes-space-2); border-left: 2px solid var(--notes-border-strong); color: var(--notes-text-secondary); }
+.collab-preview__block--code { font-family: var(--notes-font-mono); font-size: var(--notes-text-xs); white-space: pre-wrap; }
+.collab-preview__block--list { padding-left: var(--notes-space-4); }
+.collab-preview__block--placeholder { color: var(--notes-text-tertiary); font-style: italic; }
+
+/* --- Links and activity ---------------------------------------------------- */
+
+.collab-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-1); }
+
+.collab-link-item {
+  display: block;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border-radius: var(--notes-radius-sm);
+  color: inherit;
+  text-decoration: none;
+}
+.collab-link-item:hover { background: var(--notes-surface-hover); }
+
+.collab-link-item__title {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+}
+.collab-link-item__excerpt {
+  margin: 2px 0 0;
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-secondary);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.collab-link-item__mentions { margin: 2px 0 0; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+.collab-activity { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.collab-activity__item { display: flex; align-items: baseline; gap: var(--notes-space-2); font-size: var(--notes-text-sm); }
+.collab-activity__text { flex: 1; min-width: 0; }
+.collab-activity__time { flex-shrink: 0; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+/* --- Presence -------------------------------------------------------------- */
+
+.presence-avatars {
+  display: flex;
+  align-items: center;
+}
+
+.presence-avatars__item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary);
+  border: 2px solid var(--notes-surface);
+  font-size: 10px;
+  font-weight: 700;
+  /* Overlapped like a hand of cards, so three or four names still read as a
+     small group rather than a growing row that pushes the note's own title
+     out of the header. */
+  margin-left: -8px;
+}
+.presence-avatars__item:first-child {
+  margin-left: 0;
+}
+
+.presence-avatars__item--overflow {
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+}

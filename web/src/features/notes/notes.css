@@ -1,0 +1,466 @@
+/* ---------------------------------------------------------------------------
+ * Note browsing — the parts styles/notes.css does not already cover.
+ *
+ * Everything here reads tokens from styles/tokens.css: this file contains no
+ * literal colour, shadow or radius, so dark mode stays a token swap.
+ * ------------------------------------------------------------------------- */
+
+/* Cards and rows are lists, laid out. The reset keeps the markers out. */
+ul.notes-grid,
+ul.notes-list { list-style: none; margin: 0; padding: 0; }
+
+/* --- Card and row: one link, several buttons ------------------------------
+ * The whole card is clickable, but the accessible target is a single anchor
+ * stretched over it. A <button> nested inside an <a> is invalid HTML, and a
+ * div-with-onClick is not a link — it cannot be middle-clicked, opened in a
+ * new tab, or announced as one. */
+
+.note-card__link,
+.note-row__link {
+  color: inherit;
+  text-decoration: none;
+}
+.note-card__link::after,
+.note-row__link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+/* The focus ring belongs on the card, not on the invisible overlay. */
+.note-card:has(.note-card__link:focus-visible),
+.note-row:has(.note-row__link:focus-visible) {
+  outline: 2px solid var(--notes-focus-ring);
+  outline-offset: 2px;
+}
+.note-card__link:focus-visible,
+.note-row__link:focus-visible { outline: none; }
+
+.note-row { position: relative; }
+.note-row__leading { flex-shrink: 0; color: var(--notes-text-tertiary); }
+
+/* Controls have to sit above the stretched link or it swallows their clicks. */
+.note-card__pin,
+.note-card__control,
+.note-row__control { position: relative; z-index: 1; }
+
+.note-card__control,
+.note-row__control { margin-left: auto; }
+
+.note-card__meta .note-menu,
+.note-row .note-menu { margin-left: auto; }
+
+/* On a touch device there is no hover, so a hover-only pin is an invisible
+   control that still takes taps. It stays visible instead. */
+@media (hover: none) {
+  .note-card__pin { opacity: 1; }
+}
+
+.note-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--notes-text-tertiary);
+}
+
+/* A refused pin rolls its icon back on its own; this says why. Above the
+   stretched link, or the message would be a click target for the note. */
+.note-card__error {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-1);
+  margin: 0;
+  font-size: var(--notes-text-xs);
+  line-height: 1.45;
+  color: var(--notes-danger);
+}
+
+/* --- The "…" menu --------------------------------------------------------- */
+
+.note-menu { position: relative; display: inline-flex; z-index: 1; }
+
+.note-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-tertiary);
+  cursor: pointer;
+}
+.note-menu__trigger--md { width: 30px; height: 30px; }
+
+.note-menu__trigger:hover,
+.note-menu__trigger[aria-expanded='true'] {
+  background: var(--notes-surface-hover);
+  color: var(--notes-text-primary);
+}
+
+.note-menu__popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--notes-z-dropdown);
+  min-width: 216px;
+  padding: var(--notes-space-1);
+  background: var(--notes-surface-raised);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  box-shadow: var(--notes-shadow-lg);
+}
+/* Near the bottom of a scrolling column the menu opens upwards instead of off
+   the end of the list. */
+.note-menu__popup--above { top: auto; bottom: calc(100% + 4px); }
+
+.note-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  width: 100%;
+  padding: 6px var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-sm);
+  background: transparent;
+  color: var(--notes-text-primary);
+  text-align: left;
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.note-menu__item:hover { background: var(--notes-surface-hover); }
+.note-menu__item--danger { color: var(--notes-danger); }
+.note-menu__item--danger:hover { background: var(--notes-danger-soft); }
+.note-menu__item-label { flex: 1; }
+.note-menu__item-hint { color: var(--notes-text-tertiary); font-size: var(--notes-text-xs); }
+
+.note-menu__separator { margin: var(--notes-space-1) 0; border: 0; border-top: 1px solid var(--notes-border); }
+
+.note-menu__heading {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-1) var(--notes-space-2) var(--notes-space-2);
+  font-size: var(--notes-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--notes-text-tertiary);
+}
+
+.note-menu__status {
+  padding: var(--notes-space-2) var(--notes-space-3);
+  font-size: var(--notes-text-xs);
+  color: var(--notes-danger);
+}
+
+/* --- Colour picker -------------------------------------------------------- */
+
+.note-colours {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2);
+}
+
+.note-colour {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--notes-radius-pill);
+  border: 1px solid var(--note-default-border);
+  background: var(--note-default);
+  color: var(--notes-text-primary);
+  cursor: pointer;
+}
+/* The tick, not the hue, is what says "this one is selected" — colour is never
+   the only signal. */
+.note-colour[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--notes-focus-ring); }
+
+.note-colour--coral { background: var(--note-coral); border-color: var(--note-coral-border); }
+.note-colour--peach { background: var(--note-peach); border-color: var(--note-peach-border); }
+.note-colour--sand { background: var(--note-sand); border-color: var(--note-sand-border); }
+.note-colour--sage { background: var(--note-sage); border-color: var(--note-sage-border); }
+.note-colour--mint { background: var(--note-mint); border-color: var(--note-mint-border); }
+.note-colour--sky { background: var(--note-sky); border-color: var(--note-sky-border); }
+.note-colour--lavender { background: var(--note-lavender); border-color: var(--note-lavender-border); }
+.note-colour--blush { background: var(--note-blush); border-color: var(--note-blush-border); }
+.note-colour--graphite { background: var(--note-graphite); border-color: var(--note-graphite-border); }
+
+/* --- Conflicts ------------------------------------------------------------ */
+
+.conflict-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-3) var(--notes-space-4);
+  border-bottom: 1px solid var(--notes-border);
+  background: var(--notes-warning-soft);
+  flex-shrink: 0;
+}
+
+.conflict-banner__row { display: flex; align-items: flex-start; gap: var(--notes-space-3); }
+.conflict-banner__icon { color: var(--notes-warning); flex-shrink: 0; margin-top: 2px; }
+.conflict-banner__text { flex: 1; min-width: 0; }
+.conflict-banner__title { margin: 0; font-size: var(--notes-text-sm); font-weight: 650; color: var(--notes-text-primary); }
+.conflict-banner__detail { margin: 2px 0 0; font-size: var(--notes-text-sm); color: var(--notes-text-secondary); }
+.conflict-banner__actions { display: flex; gap: var(--notes-space-2); flex-wrap: wrap; margin-top: var(--notes-space-2); }
+.conflict-banner__error { margin: var(--notes-space-2) 0 0; font-size: var(--notes-text-sm); color: var(--notes-danger); }
+
+/* --- List column toolbar -------------------------------------------------- */
+
+.notes-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) var(--notes-space-4);
+  border-bottom: 1px solid var(--notes-border);
+  flex-shrink: 0;
+}
+
+.notes-toolbar__sort {
+  height: 28px;
+  padding: 0 var(--notes-space-2);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  cursor: pointer;
+}
+
+.view-toggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+}
+
+.view-toggle__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-tertiary);
+  cursor: pointer;
+}
+.view-toggle__button:hover { color: var(--notes-text-primary); }
+.view-toggle__button[aria-pressed='true'] {
+  background: var(--notes-surface);
+  color: var(--notes-primary);
+  box-shadow: var(--notes-shadow-xs);
+}
+
+/* --- Notices, loading, paging --------------------------------------------- */
+
+.notes-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin-bottom: var(--notes-space-3);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  line-height: 1.5;
+}
+.notes-notice--warning { background: var(--notes-warning-soft); color: var(--notes-warning); }
+.notes-notice--danger { background: var(--notes-danger-soft); color: var(--notes-danger); }
+
+.notes-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-5) var(--notes-space-4);
+}
+.notes-error__message { margin: 0; font-size: var(--notes-text-sm); color: var(--notes-text-secondary); }
+
+.note-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+}
+
+.notes-column__more { display: flex; justify-content: center; padding: var(--notes-space-4) 0 var(--notes-space-2); }
+
+/* --- Home ----------------------------------------------------------------- */
+
+.home__header { display: flex; align-items: flex-end; gap: var(--notes-space-4); flex-wrap: wrap; }
+.home__header-text { flex: 1; min-width: 0; }
+
+.today-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.today-item {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: inherit;
+  text-decoration: none;
+  font-size: var(--notes-text-sm);
+}
+.today-item:hover { border-color: var(--notes-border-strong); background: var(--notes-surface-hover); }
+.today-item__icon { flex-shrink: 0; color: var(--notes-text-tertiary); }
+.today-item__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.today-item__when { flex-shrink: 0; font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+.today-item__when--overdue { color: var(--notes-danger); font-weight: 600; }
+
+/* --- Quick capture -------------------------------------------------------- */
+
+.quick-capture .notes-notice { margin: 0 var(--notes-space-4) var(--notes-space-3); }
+
+.quick-capture__error { flex: 1; min-width: 0; }
+
+.quick-capture__hint {
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-tertiary);
+  padding-right: var(--notes-space-2);
+}
+
+/* --- Editor pane ---------------------------------------------------------- */
+
+.editor__skeleton { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+.editor__skeleton > :first-child { margin-bottom: var(--notes-space-3); }
+.editor__pane-notice { padding: var(--notes-space-3) var(--notes-space-4) 0; }
+.editor__pane-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
+.editor__crumb-link { color: inherit; text-decoration: none; }
+.editor__crumb-link:hover { color: var(--notes-primary); text-decoration: underline; }
+.editor__pane-body { flex: 1; display: flex; min-height: 0; position: relative; }
+.editor__pane-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* --- Info panel ----------------------------------------------------------- */
+
+.info-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-3); }
+
+.info-row { display: flex; gap: var(--notes-space-3); align-items: baseline; }
+.info-row__label {
+  flex: 0 0 88px;
+  font-size: var(--notes-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--notes-text-tertiary);
+}
+.info-row__value { flex: 1; min-width: 0; font-size: var(--notes-text-sm); overflow-wrap: anywhere; }
+
+.info-section { margin-top: var(--notes-space-6); }
+.info-section__title {
+  margin: 0 0 var(--notes-space-2);
+  font-size: var(--notes-text-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--notes-text-tertiary);
+}
+
+.info-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.info-link {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: 5px var(--notes-space-2);
+  border-radius: var(--notes-radius-sm);
+  color: var(--notes-text-primary);
+  text-decoration: none;
+  font-size: var(--notes-text-sm);
+}
+.info-link:hover { background: var(--notes-surface-hover); }
+.info-link__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.info-empty { margin: 0; font-size: var(--notes-text-sm); color: var(--notes-text-tertiary); }
+
+.info-entry { display: flex; flex-direction: column; padding: var(--notes-space-1) var(--notes-space-2); }
+.info-entry__label { font-size: var(--notes-text-sm); }
+.info-entry__time { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); }
+
+/* --- Dialogs -------------------------------------------------------------- */
+
+.picker-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.picker-option {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  width: 100%;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-sm);
+  background: transparent;
+  color: var(--notes-text-primary);
+  text-align: left;
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.picker-option:hover { background: var(--notes-surface-hover); }
+.picker-option[aria-pressed='true'] { background: var(--notes-primary-soft); font-weight: 600; }
+.picker-option__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-option__depth { flex-shrink: 0; }
+
+/* --- Tags, editable from the info panel ----------------------------------- */
+
+.info-tags {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+  align-items: flex-start;
+}
+
+.info-tags__empty { color: var(--notes-text-tertiary); }
+
+/* Sized to the row it sits in rather than the panel: a full-width input here
+   reads as a search box, which this is not. */
+.info-tags__input {
+  width: 12rem;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-xs);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-xs);
+}
+
+.info-tags__input:focus-visible {
+  outline: 2px solid var(--notes-focus-ring);
+  outline-offset: 1px;
+}
+
+.note-tag__remove {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.note-tag__remove:hover { opacity: 1; }
+
+.note-tag__remove:disabled { cursor: default; opacity: 0.3; }

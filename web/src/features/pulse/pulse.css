@@ -1,0 +1,363 @@
+/* ---------------------------------------------------------------------------
+ * Pulse.
+ *
+ * Two things this stylesheet is doing deliberately.
+ *
+ * An answer is *quieter* than the notes around it. Everything here sits on the
+ * secondary surface with no accent fill, because a generated paragraph styled
+ * to look more important than the note it came from is the visual version of
+ * the mistake this feature spends its whole time avoiding.
+ *
+ * The two honesty labels — "answered from general knowledge" and the list of
+ * sources — are the only things given a border and a colour of their own, and
+ * neither uses colour alone: each carries an icon or a heading, so a reader who
+ * cannot tell the warning tint from the surface still sees the words.
+ * ------------------------------------------------------------------------- */
+
+/* --- The panel ------------------------------------------------------------ */
+
+.pulse-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  background: var(--notes-surface);
+  border-left: 1px solid var(--notes-border);
+}
+
+.pulse-panel__header {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-3) var(--notes-space-4);
+  border-bottom: 1px solid var(--notes-border);
+}
+.pulse-panel__mark { display: inline-flex; color: var(--notes-primary); }
+.pulse-panel__title { margin: 0; flex: 1; font-size: var(--notes-text-md); font-weight: 600; }
+
+.pulse-panel__thread { flex: 1; min-height: 0; overflow-y: auto; padding: var(--notes-space-4); }
+
+.pulse-panel__intro {
+  margin: 0;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  line-height: 1.55;
+}
+
+/* The whole of a deployment without Pulse: one sentence, no controls. Sized
+   like body text rather than like a banner — it is a fact, not an offer. */
+.pulse-off {
+  margin: 0;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+}
+
+/* Where the panel would have been, the sentence keeps the panel's padding so
+   it sits where the reader was already looking. */
+.pulse-off--panel { padding: var(--notes-space-4); }
+
+/* --- The thread ----------------------------------------------------------- */
+
+.pulse-thread { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-5); }
+
+.pulse-turn { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.pulse-turn__question {
+  margin: 0;
+  font-size: var(--notes-text-base);
+  font-weight: 600;
+  color: var(--notes-text-primary);
+}
+
+/* The scope travels with the question because "yes" means something different
+   depending on whether one note or the whole library was read. */
+.pulse-turn__scope {
+  display: inline-block;
+  margin-right: var(--notes-space-2);
+  padding: 1px var(--notes-space-2);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+.pulse-turn__ungrounded {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-warning);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-warning-soft);
+  color: var(--notes-warning);
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+}
+
+/* Quieter than the ungrounded warning: an answer that named no note is a gap
+   in the citations, not a claim the reader has to be stopped by. Carried by the
+   words and the icon, never by the colour. */
+.pulse-turn__unsourced {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin: 0;
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  line-height: 1.5;
+}
+
+.pulse-turn__answer { color: var(--notes-text-primary); font-size: var(--notes-text-base); line-height: 1.6; }
+.pulse-turn__answer p { margin: 0 0 var(--notes-space-2); white-space: pre-wrap; }
+.pulse-turn__answer p:last-child { margin-bottom: 0; }
+
+/* --- Waiting -------------------------------------------------------------- */
+
+.pulse-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin-top: var(--notes-space-3);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+}
+.pulse-progress__text {
+  flex: 1;
+  min-width: 0;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Failures ------------------------------------------------------------- */
+
+.pulse-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  margin-top: var(--notes-space-3);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+  font-size: var(--notes-text-sm);
+}
+.pulse-notice__icon { flex: none; margin-top: 1px; color: var(--notes-text-secondary); }
+.pulse-notice__body { display: flex; flex-direction: column; gap: var(--notes-space-2); min-width: 0; }
+.pulse-notice__message { margin: 0; color: var(--notes-text-primary); }
+.pulse-notice__detail { margin: 0; color: var(--notes-text-secondary); font-size: var(--notes-text-xs); }
+
+/* --- Sources -------------------------------------------------------------- */
+
+.pulse-sources { margin-top: var(--notes-space-2); }
+
+.pulse-sources__heading {
+  margin: 0 0 var(--notes-space-2);
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pulse-sources__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.pulse-source__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  max-width: 100%;
+  padding: 3px var(--notes-space-2) 3px var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  text-decoration: none;
+}
+.pulse-source__pill:hover { background: var(--notes-surface-hover); border-color: var(--notes-primary-border); }
+.pulse-source__pill:focus-visible { outline: 2px solid var(--notes-focus-ring); outline-offset: 2px; }
+
+.pulse-source__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The quotation is what makes a citation checkable, so it is readable rather
+   than decorative — but two lines of it, not the whole block. */
+.pulse-source__snippet {
+  margin: var(--notes-space-1) 0 0;
+  padding-left: var(--notes-space-3);
+  border-left: 2px solid var(--notes-border);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- Composing ------------------------------------------------------------ */
+
+.pulse-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-3) var(--notes-space-4) var(--notes-space-4);
+  border-top: 1px solid var(--notes-border);
+}
+
+/* A fieldset is the right element for a radio group and the wrong one for the
+   box the browser draws around it. */
+.pulse-scope { border: 0; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--notes-space-2); align-items: center; }
+.pulse-scope__legend { float: left; width: 100%; margin-bottom: var(--notes-space-1); color: var(--notes-text-tertiary); font-size: var(--notes-text-xs); }
+
+.pulse-scope__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-1);
+  padding: 3px var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface);
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.pulse-scope__option:has(input:checked) {
+  border-color: var(--notes-primary-border);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+  font-weight: 600;
+}
+.pulse-scope__option:has(input:disabled) { opacity: 0.6; cursor: default; }
+
+.pulse-compose__input {
+  width: 100%;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font: inherit;
+  font-size: var(--notes-text-base);
+  resize: vertical;
+}
+.pulse-compose__input:focus-visible { outline: 2px solid var(--notes-focus-ring); outline-offset: -1px; border-color: var(--notes-primary-border); }
+
+.pulse-compose__bar { display: flex; align-items: center; gap: var(--notes-space-3); }
+.pulse-compose__hint { flex: 1; margin: 0; color: var(--notes-text-tertiary); font-size: var(--notes-text-xs); }
+
+/* --- The action menu ------------------------------------------------------ */
+
+.pulse-menu { position: relative; display: inline-flex; }
+
+.pulse-menu__popup {
+  position: absolute;
+  top: calc(100% + var(--notes-space-1));
+  right: 0;
+  z-index: var(--notes-z-dropdown);
+  min-width: 240px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--notes-space-1);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-raised);
+  box-shadow: var(--notes-shadow-lg);
+}
+
+.pulse-menu__loading { display: flex; flex-direction: column; gap: var(--notes-space-2); padding: var(--notes-space-3); }
+.pulse-menu__notice { padding: 0 var(--notes-space-2) var(--notes-space-2); }
+.pulse-menu__empty { margin: 0; padding: var(--notes-space-3); color: var(--notes-text-secondary); font-size: var(--notes-text-sm); }
+
+.pulse-menu__group {
+  margin: var(--notes-space-2) 0 var(--notes-space-1);
+  padding: 0 var(--notes-space-3);
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pulse-menu__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--notes-space-2);
+  width: 100%;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: none;
+  color: var(--notes-text-primary);
+  font: inherit;
+  font-size: var(--notes-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.pulse-menu__item:hover { background: var(--notes-surface-hover); }
+.pulse-menu__item:focus-visible { outline: 2px solid var(--notes-focus-ring); outline-offset: -2px; }
+
+/* Still reachable and still readable: the reason it cannot run is the point of
+   showing it at all, so it keeps its place in the tab order. */
+.pulse-menu__item[aria-disabled='true'] { color: var(--notes-text-tertiary); cursor: default; }
+.pulse-menu__item[aria-disabled='true']:hover { background: none; }
+
+.pulse-menu__label { flex: 1; min-width: 0; }
+.pulse-menu__reason { flex: none; color: var(--notes-text-tertiary); font-size: var(--notes-text-xs); }
+
+/* --- Action options and results ------------------------------------------- */
+
+.pulse-options { display: flex; flex-direction: column; gap: var(--notes-space-2); margin-bottom: var(--notes-space-3); }
+.pulse-options__label { color: var(--notes-text-secondary); font-size: var(--notes-text-sm); }
+.pulse-options__input {
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font: inherit;
+  font-size: var(--notes-text-base);
+}
+.pulse-options__input:focus-visible { outline: 2px solid var(--notes-focus-ring); outline-offset: -1px; }
+
+.pulse-result { display: flex; flex-direction: column; gap: var(--notes-space-3); }
+
+/* A preview, framed as one: the result sits in a box that does not look like
+   the note it is being offered to. */
+.pulse-result__preview {
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-secondary);
+  max-height: 40vh;
+  overflow-y: auto;
+  font-size: var(--notes-text-base);
+  line-height: 1.6;
+}
+.pulse-result__preview p { margin: 0 0 var(--notes-space-2); white-space: pre-wrap; }
+.pulse-result__preview p:last-child { margin-bottom: 0; }
+
+.pulse-result__items { margin: 0; padding-left: var(--notes-space-5); display: flex; flex-direction: column; gap: var(--notes-space-1); }
+.pulse-result__meta { margin-left: var(--notes-space-2); color: var(--notes-text-tertiary); font-size: var(--notes-text-xs); }
+
+/* A wide table scrolls inside its own box rather than widening the dialog. */
+.pulse-result__table-wrap { overflow-x: auto; }
+.pulse-result__table { border-collapse: collapse; width: 100%; font-size: var(--notes-text-sm); }
+.pulse-result__table th,
+.pulse-result__table td { padding: var(--notes-space-2); border: 1px solid var(--notes-border); text-align: left; vertical-align: top; }
+.pulse-result__table th { color: var(--notes-text-secondary); font-weight: 600; }
+
+.pulse-result__blocked {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+}

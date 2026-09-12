@@ -1,0 +1,248 @@
+/* ---------------------------------------------------------------------------
+ * Attachments.
+ *
+ * A row is a file, and the file is the thing people scan for — so the name is
+ * the strongest element on the row and the state line beneath it is quiet
+ * until something is wrong. Every colour comes from tokens.css; the failure
+ * state is red *and* carries an alert icon and the word "Couldn't", because
+ * colour on its own is not a signal.
+ * ------------------------------------------------------------------------- */
+
+.att-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-3);
+}
+
+.att-panel__header {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-3);
+  flex-wrap: wrap;
+}
+
+.att-panel__title {
+  margin: 0;
+  font-size: var(--notes-text-md);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--notes-text-primary);
+}
+
+.att-panel__count { font-weight: 500; color: var(--notes-text-tertiary); }
+
+.att-panel__actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  flex-wrap: wrap;
+}
+
+.att-panel__error,
+.att-panel__notice {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border-radius: var(--notes-radius-sm);
+  font-size: var(--notes-text-sm);
+}
+
+.att-panel__error { background: var(--notes-danger-soft); color: var(--notes-danger); flex-wrap: wrap; }
+.att-panel__notice { background: var(--notes-info-soft); color: var(--notes-info); flex-wrap: wrap; }
+
+/* The sentence takes the room; the control that answers it sits at the end. */
+.att-panel__error > span,
+.att-panel__notice > span { flex: 1 1 12rem; min-width: 0; }
+
+/* Inside a coloured strip a ghost button must not fall back to the app's grey,
+   which does not carry enough contrast on danger-soft or info-soft. */
+.att-panel__error .btn--ghost,
+.att-panel__notice .btn--ghost { color: inherit; }
+
+/* --- Drop zone ---------------------------------------------------------- */
+
+.att-dropzone { position: relative; }
+
+.att-dropzone__overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--notes-z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--notes-space-4);
+  border: 2px dashed var(--notes-primary);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-primary-soft);
+  /* The overlay is feedback for a drag already in flight; it must never become
+     the drop target itself or the enter/leave counting goes wrong. */
+  pointer-events: none;
+}
+
+.att-dropzone__overlay--blocked {
+  border-color: var(--notes-border-strong);
+  background: var(--notes-surface-secondary);
+}
+
+.att-dropzone__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+  color: var(--notes-text-primary);
+  text-align: center;
+}
+
+/* --- Rows --------------------------------------------------------------- */
+
+.att-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+}
+
+.att-block {
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+  overflow: hidden;
+}
+
+.att-block--failed { border-color: var(--notes-danger); }
+
+.att-block__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-3);
+}
+
+.att-block__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+  overflow: hidden;
+}
+
+.att-block__thumb { width: 100%; height: 100%; object-fit: cover; }
+
+.att-block__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.att-block__name {
+  margin: 0;
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+  color: var(--notes-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.att-block__meta {
+  margin: 0;
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-tertiary);
+}
+
+.att-block__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* --- State line --------------------------------------------------------- */
+
+.att-status {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  flex-wrap: wrap;
+  margin: 2px 0 0;
+  font-size: var(--notes-text-xs);
+}
+
+.att-status--busy { color: var(--notes-text-secondary); }
+.att-status--ready { color: var(--notes-primary); }
+.att-status--failed { color: var(--notes-danger); }
+.att-status--muted { color: var(--notes-text-tertiary); }
+.att-status__detail { color: var(--notes-text-tertiary); }
+
+.att-progress {
+  height: 4px;
+  margin-top: var(--notes-space-1);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface-secondary);
+  overflow: hidden;
+}
+
+/* Indeterminate on purpose: fetch reports no upload progress, so the bar says
+   "working" and never invents a percentage. */
+.att-progress__bar {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--notes-primary);
+  animation: att-progress-slide 1.4s var(--notes-ease) infinite;
+}
+
+@keyframes att-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
+/* --- Previews ----------------------------------------------------------- */
+
+.att-preview {
+  display: block;
+  border-top: 1px solid var(--notes-border);
+  background: var(--notes-surface-secondary);
+}
+
+.att-preview--image img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.att-preview--pdf { padding: var(--notes-space-2); }
+.att-preview--pdf object { display: block; width: 100%; height: 460px; border: 0; }
+
+/* The bytes are fetched with the session attached rather than by the <img>
+   itself, so a preview has a real loading step and needs somewhere to sit. */
+.att-preview__loading { display: block; line-height: 0; }
+
+.att-preview__fallback {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: var(--notes-space-4);
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+}
+
+.att-preview__fallback a { color: var(--notes-primary); }
+
+/* With motion switched off the slide never plays, and a bar parked off-screen
+   would read as "nothing is happening". A full, quiet bar is the honest
+   still-frame of an indeterminate one. */
+@media (prefers-reduced-motion: reduce) {
+  .att-progress__bar { width: 100%; }
+}

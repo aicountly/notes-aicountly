@@ -1,0 +1,93 @@
+/* ---------------------------------------------------------------------------
+ * Smart folders, and the rule builder behind them.
+ *
+ * The builder is a stack of rows rather than a grid: at the widths this dialog
+ * gets, a three-column grid either truncates the field names or scrolls
+ * sideways, and a rule you cannot read is a rule you cannot trust.
+ * ------------------------------------------------------------------------- */
+
+.sf-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+
+.sf-row__name { display: flex; align-items: center; gap: var(--notes-space-2); flex: 1; min-width: 0; }
+.sf-row__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Match mode ----------------------------------------------------------- */
+
+/* A fieldset is the right element for a radio group and the wrong one for the
+   box the browser draws around it. */
+.sf-fieldset { border: 0; margin: 0; padding: 0; }
+
+.sf-match { display: flex; gap: var(--notes-space-2); flex-wrap: wrap; }
+
+.sf-match__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: 6px var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.sf-match__option:has(input:checked) {
+  border-color: var(--notes-primary-border);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+  font-weight: 600;
+}
+
+/* --- Rules ---------------------------------------------------------------- */
+
+.sf-rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.sf-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-secondary);
+}
+.sf-rule--invalid { border-color: var(--notes-danger); }
+
+.sf-rule__field { flex: 1 1 140px; min-width: 0; }
+.sf-rule__operator { flex: 1 1 110px; min-width: 0; }
+.sf-rule__value { flex: 2 1 180px; min-width: 0; }
+.sf-rule__value--inline { display: flex; gap: var(--notes-space-2); flex-wrap: wrap; }
+.sf-rule__value--inline > * { flex: 1 1 120px; }
+.sf-rule__remove { flex: 0 0 auto; margin-bottom: 1px; }
+.sf-rule__error { flex: 1 1 100%; margin: 0; font-size: var(--notes-text-xs); color: var(--notes-danger); }
+.sf-rule__static { flex: 2 1 180px; margin: 0; align-self: center; font-size: var(--notes-text-sm); color: var(--notes-text-secondary); }
+
+/* A boolean rule reads "Pinned — is — Yes", so the toggle carries its own word
+   rather than being an unlabelled box. */
+.sf-toggle { display: inline-flex; align-items: center; gap: var(--notes-space-2); font-size: var(--notes-text-sm); cursor: pointer; }
+.sf-toggle input { width: 16px; height: 16px; accent-color: var(--notes-primary); }
+
+.sf-rules__footer { display: flex; align-items: center; justify-content: space-between; gap: var(--notes-space-3); flex-wrap: wrap; }
+
+/* --- Preview -------------------------------------------------------------- */
+
+.sf-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+}
+.sf-preview__count { font-size: var(--notes-text-lg); font-weight: 650; color: var(--notes-text-primary); font-variant-numeric: tabular-nums; }
+.sf-preview__body { flex: 1; min-width: 0; }
+
+/* A control held back with aria-disabled rather than `disabled` keeps its place
+   in the tab order, so the sentence explaining why it cannot be used stays
+   reachable — but it still has to look unavailable, and app.css only dims the
+   real `disabled` state. */
+.nav-section__header .btn[aria-disabled='true'] { opacity: 0.5; cursor: not-allowed; }
+.nav-section__header .btn[aria-disabled='true']:hover { background: transparent; color: var(--notes-text-secondary); }

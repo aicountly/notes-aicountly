@@ -1,0 +1,70 @@
+/* ---------------------------------------------------------------------------
+ * The notebook tree.
+ *
+ * Indentation is done with padding on the row rather than a margin on the
+ * list, so the hover and active tints still run the full width of the sidebar
+ * at every level — an indented highlight makes a nested row look like a
+ * different kind of thing.
+ * ------------------------------------------------------------------------- */
+
+.nb-tree { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.nb-tree--nested { margin-top: 1px; }
+
+/* Each level adds one step, and every level leaves room for the twisty so a
+   leaf's name still lines up with its siblings'. The step count is a custom
+   property set per row from the node's depth, which keeps the rule count
+   independent of how deep the tree is allowed to go. */
+.nb-tree .org-row > .nav-item {
+  padding-left: calc(var(--notes-space-2) + 20px + var(--nb-level, 0) * var(--notes-space-4));
+}
+
+.nb-twisty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-tertiary);
+  cursor: pointer;
+}
+.nb-twisty:hover { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+.nb-twisty svg { transition: transform var(--notes-duration-fast) var(--notes-ease); }
+.nb-twisty[aria-expanded='true'] svg { transform: rotate(90deg); }
+
+/* Sits in the gap the row's padding leaves, so the whole row stays one link
+   target and the disclosure is still its own button. */
+.nb-row .nb-twisty {
+  position: absolute;
+  left: calc(var(--notes-space-2) + var(--nb-level, 0) * var(--notes-space-4));
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+}
+
+.nb-row__name { display: flex; align-items: center; gap: var(--notes-space-2); flex: 1; min-width: 0; }
+.nb-row__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nb-row--archived .nb-row__label { font-style: italic; color: var(--notes-text-tertiary); }
+
+.nb-delete__list { margin: var(--notes-space-2) 0 0; padding-left: var(--notes-space-5); font-size: var(--notes-text-sm); color: var(--notes-text-secondary); }
+.nb-delete__list li + li { margin-top: var(--notes-space-1); }
+
+.nb-members { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-1); }
+
+.nb-member {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+}
+.nb-member__id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--notes-text-sm); }
+
+.nb-share-form { display: flex; flex-wrap: wrap; gap: var(--notes-space-2); align-items: flex-end; }
+.nb-share-form .org-field { flex: 1 1 160px; }

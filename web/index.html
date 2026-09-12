@@ -2,8 +2,28 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Capture anything. Find everything. Act on what matters. Aicountly Notes." />
+    <meta name="theme-color" content="#25b003" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101310" media="(prefers-color-scheme: dark)" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/apps/notes.png" />
+    <link rel="apple-touch-icon" href="/apps/notes.png" />
     <title>Notes · Aicountly</title>
+    <script>
+      // Apply the stored theme before the first paint. Without this the page
+      // renders light and then flips to dark, which is visible on every load.
+      (function () {
+        try {
+          var stored = localStorage.getItem('notes:theme')
+          if (stored === 'dark' || stored === 'light') {
+            document.documentElement.setAttribute('data-theme', stored)
+          }
+        } catch (e) {
+          /* private mode — fall through to prefers-color-scheme */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

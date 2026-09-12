@@ -1,0 +1,21 @@
+{
+  "name": "Aicountly Notes",
+  "short_name": "Notes",
+  "description": "Capture anything. Find everything. Act on what matters.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f7",
+  "theme_color": "#25b003",
+  "orientation": "any",
+  "categories": ["productivity", "business"],
+  "icons": [
+    { "src": "/apps/notes.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/apps/notes.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "New note", "short_name": "New note", "url": "/notes/new" },
+    { "name": "New checklist", "short_name": "Checklist", "url": "/notes/new?type=checklist" },
+    { "name": "Reminders", "short_name": "Reminders", "url": "/reminders" }
+  ]
+}

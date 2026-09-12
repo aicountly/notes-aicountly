@@ -1,162 +1,215 @@
-# notes-aicountly
+# Aicountly Notes
 
-Notes for Aicountly — a React single-page app built with Vite and TypeScript,
-with a small PHP API alongside it. Both halves deploy to cPanel.
+**Capture anything. Find everything. Act on what matters.**
+
+The knowledge layer of the AICOUNTLY suite: a place to capture text, checklists,
+voice, documents and meetings, organise them into notebooks, and turn them into
+something searchable and actionable.
 
 | Environment | App | API |
 | --- | --- | --- |
 | Production | https://notes.aicountly.com | https://notes.aicountly.com/api |
 | Sandbox | https://notes.gh.aicountly.com | https://notes.gh.aicountly.com/api |
 
-## What this app does today
+## What it does
 
-Login → Dashboard. The dashboard shows a welcome message and a **Log out**
-button, and nothing else. No navigation, no modules, no placeholder cards —
-those arrive with the product.
+Create a note in about two seconds, from a composer that is one line until you
+need more. Write in a real editor — headings, checklists, tables, callouts, code,
+images, attachments — with `/` for blocks and for linking another note, and `@`
+to mention someone the note is shared with. Tags are added from the note's info
+panel. Nothing is ever saved by hand.
 
-Signing in is the AICOUNTLY portal's job, the same as every other AICOUNTLY
-SaaS: the app redirects to the portal, the portal returns an `auth_token`, and
-the app exchanges it for a short-lived session key. A user who is already signed
-in to another AICOUNTLY product lands straight on the dashboard.
+File notes into nested notebooks, tag them, pin them, colour them, or leave them
+where they land and find them again by searching. Smart folders are saved
+queries, so a note can be in as many as you like and in none of them tomorrow.
+Share a note or a whole notebook as editor, commenter or viewer. Version history
+is always there. So is Trash. Where the deployment has live collaboration
+switched on, you can see who else has a shared note open and know within a
+few seconds when their changes are saved — see docs/REALTIME.md for exactly
+what that does and does not promise.
 
-See [docs/auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md).
+It works on a train: notes are cached on the device, edits are queued, and when
+the connection returns they sync — and if the note changed in the meantime, you
+are asked, not overruled.
+
+Where the deployment has it enabled, Pulse answers questions across your notes
+**with citations** back to the note the answer came from.
+
+For the design decisions behind all of that, start with
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Layout
 
 ```
-web/          React app (Vite). Builds to web/dist, deployed to the document root.
-server-php/   PHP API. Deployed to the api/ folder inside the document root.
-docs/         deployment and auth notes
+web/          React + Vite SPA. Builds to web/dist, deployed to the document root.
+server-php/   The API. Plain PHP 8.4, no dependencies. Deployed to api/ inside it.
+docs/         architecture, database, security, deployment, auth, integrations
 ```
+
+The API is **plain PHP with no Composer dependencies**, because it is deployed by
+`rsync` to cPanel with no build step and nowhere to run `composer install`.
+Structure comes from a small PSR-4 autoloader, a router and a service layer
+rather than from a framework. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#why-this-stack).
+
+The database is **PostgreSQL 14+**, and specifically so: the note document is
+`jsonb`, search is a generated `tsvector` with a GIN index, and semantic search
+expects pgvector. See [docs/DATABASE.md](docs/DATABASE.md).
 
 ## Getting started
 
-Requires Node.js 22 or newer.
+Requires Node.js 22+, PHP 8.4+ with `pdo_pgsql`, and PostgreSQL 14+.
 
 ```bash
-cd web
+# 1. The API
+cd server-php
+cp .env.example .env          # set APP_ENV=local and the DB_* values
+php bin/migrate.php up        # create the schema
+php bin/migrate.php seed      # system templates (no demo data, ever)
+php -S localhost:8000
+
+# 2. The app
+cd ../web
 npm install
-cp ../.env.example ../.env
+cp ../.env.example .env       # into web/, which is where Vite reads it
 npm run dev
 ```
 
 The dev server runs on http://localhost:5173 and signs in through the **sandbox**
-portal. Point `VITE_API_BASE_URL` at the deployed sandbox API
-(`https://notes.gh.aicountly.com/api`) so the token exchange has somewhere to
-go — and add `http://localhost:5173` to `CORS_ALLOWED_ORIGINS` in that server's
-`api/.env`, since localhost is the one case where the app and API are not
+portal. Add `http://localhost:5173` to `CORS_ALLOWED_ORIGINS` in
+`server-php/.env` — localhost is the one case where the app and the API are not
 same-origin.
 
-| Script | Purpose |
+| Command | What it does |
 | --- | --- |
 | `npm run dev` | Vite dev server on http://localhost:5173 |
 | `npm run build` | Type-check, then build to `web/dist/` |
 | `npm run typecheck` | Type-check only |
-| `npm run preview` | Serve the production build locally |
+| `npm run test` | Component and hook tests (vitest) |
+| `npm run e2e` | Browser tests (Playwright, against a stubbed API) |
+| `npm run e2e -- --project=desktop` | Just the desktop viewport |
+| `php tests/run.php` | API tests, against a real PostgreSQL database |
+| `php bin/migrate.php status` | Which migrations are applied |
+| `php bin/worker.php --once` | Run queued background jobs once (cron-friendly) |
 
-The PHP API has no build step and no dependencies. To run it locally:
+If the machine already has a Chromium that Playwright did not install — most CI
+images and sandboxes do — point at it instead of downloading another copy:
 
 ```bash
-cd server-php
-cp .env.example .env      # set APP_ENV=local
-php -S localhost:8000
+PLAYWRIGHT_CHROMIUM_PATH=/path/to/chrome npm run e2e
 ```
 
-## Environment variables
+### Background jobs
 
-`.env` is git-ignored and is never deployed — `.env.example` is the tracked
-template. There are two of them, and they work in opposite ways:
+Attachment processing, OCR, transcription and trash retention run outside the
+request. cPanel has no queue daemon, so the worker is a CLI command a cron job
+calls:
+
+```
+*/5 * * * * cd /home/<user>/public_html/api && php bin/worker.php --once >/dev/null 2>&1
+```
+
+## Configuration
+
+Two `.env` files that work in opposite ways, and the difference matters:
 
 | File | Read | Used by |
 | --- | --- | --- |
-| `.env.example` | **Build time**, inlined into the bundle | `web/` |
+| `.env.example` (repo root; copy to `web/.env`) | **Build time**, inlined into the bundle | `web/` |
 | `server-php/.env.example` | **Runtime**, on every request | `server-php/` |
 
-| Variable | Description |
-| --- | --- |
-| `VITE_API_BASE_URL` | API base URL. Empty = this app's own origin + `/api` |
-| `VITE_APP_NAME` | Display name shown in the UI |
-| `VITE_APP_ENV` | `local`, `sandbox`, or `production` |
-| `VITE_PRODUCT_KEY` | Portal product key. Derived from the hostname when unset |
-| `VITE_PORTAL_LOGIN_URL` | Login portal override. Local development only |
+Vite inlines every `VITE_*` value when the app is compiled, so **treat every one
+of them as public** and never put a secret in one. Changing a frontend value
+means rebuilding. `server-php` is the opposite: it reads its `.env` on every
+request, so that file lives on the server and only on the server.
 
-Only `VITE_`-prefixed variables reach the browser bundle, and Vite inlines them
-at build time, so **treat every one of them as public**. Never put a secret,
-token, or password in a `VITE_` variable.
+### Feature flags
 
-### These are build-time values, not runtime values
+Every capability that depends on something outside this repository — Pulse,
+Drive, Calendar, Contacts, Connect, OCR, transcription, semantic search,
+canvas, end-to-end encrypted notes — is behind a flag and **defaults to
+off**. A flag also stays off when its dependency is unconfigured, so switching on
+`NOTES_AI_ENABLED` without a `PULSE_API_URL` cannot produce a UI full of buttons
+that fail when pressed.
 
-This matters for how you change an endpoint in production.
+One flag, `NOTES_REALTIME_ENABLED`, is not about an external dependency at
+all — presence and live-update polling (see docs/REALTIME.md) need nothing
+outside this repository. It defaults to off anyway, because a deployment gets
+to decide whether every open note polls the database every few seconds, which
+is a real and constant cost, not a free capability to always run.
 
-Vite substitutes each `VITE_*` value into the JavaScript bundle when the app is
-compiled. The deployed result is plain static files — **the app never reads a
-`.env` from disk at runtime**, so placing a `.env` next to it in the cPanel
-document root has no effect. Changing an endpoint means rebuilding and
-redeploying.
+An endpoint behind an off flag answers `503 FEATURE_DISABLED`; the frontend reads
+the same flags from `GET /api/config` and hides or disables the control. There
+are no "Coming soon" placeholders. An unconfigured deployment looks like a
+smaller product, not a broken one.
 
-This is the opposite of `server-php`, which is PHP and does read its own `.env`
-on every request.
+See `server-php/.env.example` for the full list, and
+[IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for what is built,
+what is flagged off, and what is not built at all.
+
+## Attachments
+
+Attachment bytes never go in Postgres, and `note_attachments` is a join table
+rather than a second object store.
+
+Where the bytes go is one decision in one place: **AICOUNTLY Drive** when
+`NOTES_DRIVE_ENABLED=true`, the local disk under `NOTES_STORAGE_PATH` otherwise.
+
+Drive is the suite's storage platform — a metadata service in front of
+S3-compatible buckets — not a put/get object store. It issues a presigned S3 URL,
+the bytes go **straight to the object store**, and Drive is then told to scan the
+object and promote it out of quarantine; downloads come back as a short-lived
+presigned URL that Notes redirects to. Notes runs that sequence server-side on
+the caller's own session, so Drive enforces its own permissions and the browser
+never talks to Drive.
+
+Reading an existing attachment follows the row's `storage_provider`, not the
+current flag, so turning Drive on changes where new files go and nothing else.
+One caveat before flipping it: Drive's MIME allowlist has no `audio/` or
+`video/`, so with Drive on, voice notes and meeting recordings are refused rather
+than stored.
+
+See [docs/DRIVE_INTEGRATION.md](docs/DRIVE_INTEGRATION.md) — including what is
+not built.
+
+## Signing in
+
+Signing in is the AICOUNTLY portal's job, the same as every other AICOUNTLY SaaS:
+the app redirects to the portal, the portal returns an `auth_token`, and the app
+exchanges it for a short-lived session key. A user already signed in to another
+AICOUNTLY product lands straight in the app. Nothing here mints, signs or stores
+a credential.
+
+See [docs/auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md).
 
 ## Deployment
 
-Deployment is **manual only**. Nothing deploys on push or merge — both
-workflows trigger exclusively via `workflow_dispatch`.
+Deployment is **manual only** — nothing deploys on push or merge. **Actions** →
+pick a workflow → **Run workflow**.
 
-To deploy: **Actions** → pick a workflow → **Run workflow** → pick a branch →
-**Run**.
+Web and API deploy together in one run per environment. Both rsync steps use
+`--delete`, and the excludes are what make that safe: the web step must not
+delete `api/`, and the API step must not delete its `.env` or `storage/`. After a
+release that adds a migration, run it once over SSH.
 
-| Workflow | Deploys | To |
-| --- | --- | --- |
-| Deploy to cPanel Production | `web/dist/` then `server-php/` | document root, then `api/` inside it |
-| Deploy to cPanel Sandbox | `web/dist/` then `server-php/` | document root, then `api/` inside it |
+Full detail, including the required secrets and the first-deploy checklist, is in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-Production and sandbox deploy separately, so releasing to one cannot disturb
-the other. Within one environment, web and API deploy together in the same
-run — they always change in step, so there is no separate "API only" workflow
-to remember to run. Source, `node_modules`, and `.env` never reach the server.
+## Security
 
-Before deploying, each workflow checks that every required SSH secret is set and
-that the remote root is a safe path, so a misconfigured repository fails in
-seconds instead of part-way through a deploy.
+Notes holds private thinking, so [docs/SECURITY.md](docs/SECURITY.md) is worth
+reading before changing anything in `Domain/Collaboration` or `NoteDocument`.
+The short version:
 
-### Configuration
-
-These repository **secrets** must be set (Settings → Secrets and variables →
-Actions → Secrets):
-
-`PROD_SSH_HOST`, `PROD_SSH_PORT`, `PROD_SSH_USER`, `PROD_SSH_PRIVATE_KEY`,
-`PROD_SSH_REMOTE_ROOT` — and the same five with a `SANDBOX_` prefix.
-
-`*_SSH_REMOTE_ROOT` is the document root to deploy into. It may be relative,
-which is the usual cPanel form — `public_html` resolves against the SSH user's
-home directory, giving `/home/<user>/public_html`. An absolute path works too.
-Because the deploy runs with `--delete`, the workflow refuses a value that would
-resolve to the home directory itself (`.`, `~`, empty), a system directory, or
-anything containing `..`.
-
-The repository **variables** `PROD_API_BASE_URL` and `SANDBOX_API_BASE_URL` are
-optional. Unset, the app calls its own origin + `/api` — which is where the same
-workflow puts the API. Set one only to point the app at a different API domain.
-
-### Notes on the rsync steps
-
-Each workflow runs two `rsync --delete` steps, one after the other, and the
-excludes are what make that safe.
-
-The **web** step syncs the document root and excludes:
-
-- `api/` — the PHP backend lives inside the document root and is deployed by the
-  next step in the same run. **Without this exclude the web step would delete
-  the entire API.**
-- `.well-known/` — Let's Encrypt / AutoSSL validation; removing it breaks
-  certificate renewal
-- `cgi-bin/` — cPanel-managed, present in every document root
-- `.env`, `.env.*`, `.git*` — never published
-
-The **API** step syncs `api/` and excludes `.env`, `.env.*` and `.git*`: the
-API's `.env` is created once on the server and read at runtime, so it must
-survive every deploy. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-
-`web/public/.htaccess` ships with the build and provides the SPA history
-fallback — which is also what serves the portal's `/auth/callback` landing — plus
-cache headers (`index.html` uncached, hashed assets cached for a year).
+- Authorisation is **one SQL fragment** requiring both a grant and a tenant
+  match, composed by every read path — so a list endpoint cannot forget it.
+- A note you cannot see is **404, not 403**.
+- The note document is client-supplied JSON rendered into the DOM, so
+  `NoteDocument::sanitize()` is a strict allowlist of nodes, marks, attributes
+  and URL schemes.
+- `dangerouslySetInnerHTML` is not used anywhere in the frontend.
+- Note content never reaches a log line.
+- A presigned object-storage URL is **not** an AICOUNTLY origin, so a session key
+  is never sent with one — the signature is already in the URL.
+- AI retrieval is permission-filtered **before** ranking, never in the UI, and
+  answers from your notes carry citations.

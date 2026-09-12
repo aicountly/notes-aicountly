@@ -1,0 +1,360 @@
+/* ---------------------------------------------------------------------------
+ * Reminders: the triage page, and the dialog that sets one.
+ *
+ * A row is a line, not a card. Reminders are read as a list — "what is late,
+ * what is next" — and a wall of boxes makes forty of them harder to scan than
+ * four. The only visual weight goes on being overdue, and even that is a
+ * border and a badge rather than colour alone.
+ *
+ * Every value is a token from styles/tokens.css.
+ * ------------------------------------------------------------------------- */
+
+.reminders {
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--notes-space-8) var(--notes-space-6) var(--notes-space-12);
+}
+
+.reminders__inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-6);
+  max-width: 52rem;
+  margin: 0 auto;
+}
+
+.reminders__header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-4);
+  flex-wrap: wrap;
+}
+
+.reminders__title {
+  margin: 0;
+  font-size: var(--notes-text-2xl);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.reminders__subtitle {
+  margin: var(--notes-space-1) 0 0;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+}
+
+/* --- Filter --------------------------------------------------------------- */
+
+.reminders__filters {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface-secondary);
+}
+
+.reminders__filter {
+  padding: 5px var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-pill);
+  background: transparent;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.reminders__filter:hover { color: var(--notes-text-primary); }
+/* Weight as well as fill, so the chosen one is not distinguished by tint only. */
+.reminders__filter[aria-pressed='true'] {
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font-weight: 600;
+  box-shadow: var(--notes-shadow-xs);
+}
+
+/* --- Groups --------------------------------------------------------------- */
+
+.reminder-group { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+.reminder-group + .reminder-group { margin-top: var(--notes-space-6); }
+
+.reminder-group__title {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  font-size: var(--notes-text-sm);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--notes-text-secondary);
+}
+
+.reminder-group__count {
+  padding: 0 6px;
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.reminder-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+/* --- A reminder ----------------------------------------------------------- */
+
+.reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-left-width: 3px;
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface);
+}
+.reminder:hover { border-color: var(--notes-border-strong); }
+
+/* Overdue is carried by the badge and the word in the row; this is only the
+   glance-level echo of it. */
+.reminder--overdue { border-left-color: var(--notes-danger); }
+.reminder--done { background: var(--notes-surface-secondary); }
+.reminder--done .reminder__note { color: var(--notes-text-secondary); }
+.reminder--loading { border-left-width: 1px; align-items: center; }
+
+.reminder__complete,
+.reminder__done-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin-top: 1px;
+  padding: 0;
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface);
+  color: transparent;
+  cursor: pointer;
+}
+/* The tick only appears on hover or focus, so an untouched row does not read
+   as already done. */
+.reminder__complete:hover:not(:disabled),
+.reminder__complete:focus-visible {
+  border-color: var(--notes-primary);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+}
+.reminder__complete:disabled { cursor: not-allowed; opacity: 0.5; }
+
+@media (hover: none) {
+  /* Nothing hovers on a touch screen, so the tick has to be visible — faintly,
+     so an outstanding reminder is still not mistaken for a finished one. */
+  .reminder__complete { color: var(--notes-text-tertiary); }
+}
+
+.reminder__done-mark {
+  border-color: var(--notes-border);
+  background: var(--notes-surface);
+  color: var(--notes-text-tertiary);
+  cursor: default;
+}
+
+.reminder__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+
+.reminder__note {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-md);
+  font-weight: 600;
+  text-decoration: none;
+}
+.reminder__note:hover { color: var(--notes-primary); text-decoration: underline; }
+
+.reminder__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+}
+
+.reminder__when { font-variant-numeric: tabular-nums; }
+
+.reminder__repeat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--notes-text-tertiary);
+  font-size: var(--notes-text-xs);
+}
+
+.reminder__outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 0;
+  font-size: var(--notes-text-xs);
+  color: var(--notes-primary-active);
+}
+
+.reminder__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--notes-space-1);
+  flex-shrink: 0;
+}
+
+/* --- Snooze --------------------------------------------------------------- */
+
+.snooze { position: relative; display: inline-flex; }
+
+.snooze__popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: var(--notes-z-dropdown);
+  width: 250px;
+  padding: var(--notes-space-2);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-raised);
+  box-shadow: var(--notes-shadow-lg);
+}
+
+.snooze__option {
+  display: block;
+  width: 100%;
+  padding: 6px var(--notes-space-2);
+  border: 0;
+  border-radius: var(--notes-radius-xs);
+  background: transparent;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.snooze__option:hover { background: var(--notes-surface-hover); }
+
+.snooze__separator { margin: var(--notes-space-2) 0; border: 0; border-top: 1px solid var(--notes-border); }
+
+.snooze__custom { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+/* --- The dialog ----------------------------------------------------------- */
+
+.rem-presets { display: flex; flex-wrap: wrap; gap: var(--notes-space-2); }
+
+.rem-when { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--notes-space-3); }
+
+.rem-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  flex-wrap: wrap;
+  margin: 0;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface-secondary);
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-primary);
+}
+.rem-preview__note { color: var(--notes-warning); font-size: var(--notes-text-xs); }
+
+.rem-zone { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+.rem-zone__adopt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-2);
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+  cursor: pointer;
+}
+
+/* A fieldset is the right grouping element and the wrong border. */
+.rem-fieldset { display: flex; flex-direction: column; gap: var(--notes-space-2); border: 0; margin: 0; padding: 0; }
+
+.rem-repeat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-4);
+  padding: var(--notes-space-3);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-secondary);
+}
+
+.rem-interval__row { display: flex; align-items: center; gap: var(--notes-space-2); }
+.rem-interval__row .org-input { width: 84px; }
+.rem-interval__unit { font-size: var(--notes-text-sm); color: var(--notes-text-secondary); }
+
+.rem-days { display: flex; flex-wrap: wrap; gap: var(--notes-space-1); }
+
+.rem-day {
+  min-width: 42px;
+  padding: 5px var(--notes-space-2);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.rem-day:hover:not(:disabled) { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+/* Weight and border as well as tint: a chosen day must be readable without
+   colour vision. */
+.rem-day[aria-pressed='true'] {
+  border-color: var(--notes-primary);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+  font-weight: 650;
+}
+.rem-day:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.rem-end { display: flex; flex-direction: column; gap: var(--notes-space-2); }
+
+.rem-end__option {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-primary);
+}
+.rem-end__option label { cursor: pointer; }
+.rem-end__number { width: 90px; }
+.rem-end__date { width: auto; }
+
+.rem-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  margin: 0;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 1px solid var(--notes-primary-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-primary-soft);
+  color: var(--notes-primary-active);
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+}
+
+/* --- Narrow --------------------------------------------------------------- */
+
+@media (max-width: 720px) {
+  .reminders { padding: var(--notes-space-5) var(--notes-space-4) var(--notes-space-10); }
+
+  /* The actions drop under the text rather than squeezing the note title into
+     three characters. */
+  .reminder { flex-wrap: wrap; }
+  .reminder__actions { width: 100%; justify-content: flex-end; }
+
+  .rem-when { grid-template-columns: 1fr; }
+  .snooze__popup { width: min(250px, 78vw); }
+}

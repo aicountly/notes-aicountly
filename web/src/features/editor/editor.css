@@ -1,0 +1,292 @@
+/* ---------------------------------------------------------------------------
+ * Editor styles that belong to this feature.
+ *
+ * The shared look of the writing surface — the measure, the typography, the
+ * ProseMirror node styles, the bubble toolbar and the slash menu chrome —
+ * lives in `styles/editor.css`. What is here is only what this feature adds:
+ * the banners, the popover positioning, the small forms and the pieces of new
+ * markup those need. Every value comes from tokens.css; a literal colour here
+ * would be a note that reads correctly in light mode and disappears in dark.
+ * ------------------------------------------------------------------------- */
+
+.note-editor {
+  position: relative;
+}
+
+.note-editor__loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-3);
+  padding-top: var(--notes-space-2);
+}
+
+/* --- Banners -------------------------------------------------------------- */
+
+.editor__banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--notes-space-3);
+  padding: var(--notes-space-3) var(--notes-space-4);
+  margin-bottom: var(--notes-space-4);
+  border-radius: var(--notes-radius-md);
+  border: 1px solid transparent;
+  font-size: var(--notes-text-sm);
+}
+
+.editor__banner--conflict {
+  background: var(--notes-warning-soft);
+  border-color: var(--notes-warning);
+  color: var(--notes-warning);
+}
+
+.editor__banner--error {
+  background: var(--notes-danger-soft);
+  border-color: var(--notes-danger);
+  color: var(--notes-danger);
+}
+
+/* Informational rather than urgent — nothing has failed, someone else's save
+   simply landed while this one was mid-edit. Never rendered alongside the
+   conflict banner, which already implies the same fact more forcefully. */
+.editor__banner--info {
+  background: var(--notes-info-soft);
+  border-color: var(--notes-info);
+  color: var(--notes-info);
+}
+
+.editor__banner-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-1);
+}
+
+.editor__banner-title {
+  margin: 0;
+  font-weight: 620;
+}
+
+.editor__banner-text {
+  margin: 0;
+  color: var(--notes-text-secondary);
+}
+
+.editor__banner-actions {
+  display: flex;
+  gap: var(--notes-space-2);
+  margin-top: var(--notes-space-2);
+}
+
+/* --- Callout -------------------------------------------------------------- */
+
+/* The shared sheet lays the callout out as a flex row for an icon that this
+   editor does not draw; stacking the blocks is what a multi-paragraph callout
+   actually needs. The tone is repeated as a left edge so it survives a
+   greyscale print and a colour-blind reader. */
+.ProseMirror .callout[data-type='callout'] {
+  flex-direction: column;
+  gap: var(--notes-space-2);
+  border-left: 3px solid var(--notes-info);
+}
+.ProseMirror .callout[data-type='callout'][data-tone='warning'] {
+  border-left-color: var(--notes-warning);
+}
+.ProseMirror .callout[data-type='callout'][data-tone='success'] {
+  border-left-color: var(--notes-primary);
+}
+.ProseMirror .callout[data-type='callout'][data-tone='danger'] {
+  border-left-color: var(--notes-danger);
+}
+
+/* --- Suggestion popovers -------------------------------------------------- */
+
+/* Positioned against the caret in viewport coordinates, so it must be fixed
+   and must not be clipped by the scrolling sheet. */
+.slash-menu.editor-popover {
+  position: fixed;
+}
+
+.slash-menu__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.slash-menu__item .slash-menu__label {
+  color: var(--notes-text-primary);
+}
+
+/* --- Small forms ---------------------------------------------------------- */
+
+.editor-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-4);
+}
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-1);
+}
+
+.editor-field__label {
+  font-size: var(--notes-text-sm);
+  font-weight: 600;
+  color: var(--notes-text-secondary);
+}
+
+.editor-field__input {
+  width: 100%;
+  height: 36px;
+  padding: 0 var(--notes-space-3);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+  color: var(--notes-text-primary);
+  font: inherit;
+  font-size: var(--notes-text-base);
+}
+.editor-field__input[type='file'] {
+  height: auto;
+  padding: var(--notes-space-2) var(--notes-space-3);
+}
+.editor-field__input:focus-visible {
+  outline: 2px solid var(--notes-focus-ring);
+  outline-offset: 1px;
+  border-color: var(--notes-focus-ring);
+}
+.editor-field__input::placeholder {
+  color: var(--notes-text-tertiary);
+}
+
+.editor-field__error {
+  margin: 0;
+  font-size: var(--notes-text-sm);
+  color: var(--notes-danger);
+}
+
+.editor-form__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  flex-wrap: wrap;
+}
+
+.editor-form__spacer {
+  flex: 1;
+}
+
+/* --- Note link picker ----------------------------------------------------- */
+
+.note-link-picker__results {
+  margin-top: var(--notes-space-4);
+  min-height: 180px;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+.note-link-picker__hint {
+  margin: 0;
+  padding: var(--notes-space-6) 0;
+  text-align: center;
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-tertiary);
+}
+
+.note-link-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.note-link-picker__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-1);
+  width: 100%;
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border: 0;
+  border-radius: var(--notes-radius-sm);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+}
+
+.note-link-picker__row--button {
+  cursor: pointer;
+}
+.note-link-picker__row--button:hover {
+  background: var(--notes-surface-hover);
+}
+.note-link-picker__row--button:focus-visible {
+  outline: 2px solid var(--notes-focus-ring);
+  outline-offset: -2px;
+}
+
+.note-link-picker__title {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  font-size: var(--notes-text-base);
+  font-weight: 600;
+  color: var(--notes-text-primary);
+}
+
+.note-link-picker__snippet {
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- Pulse ---------------------------------------------------------------- */
+
+.pulse-dialog__selection {
+  margin: 0 0 var(--notes-space-4);
+  padding: var(--notes-space-2) var(--notes-space-3);
+  border-left: 3px solid var(--notes-primary-border);
+  background: var(--notes-surface-secondary);
+  border-radius: var(--notes-radius-sm);
+  font-size: var(--notes-text-sm);
+  color: var(--notes-text-secondary);
+  max-height: 8em;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.pulse-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--notes-space-2);
+}
+
+.pulse-dialog__answer {
+  margin-top: var(--notes-space-4);
+  padding-top: var(--notes-space-4);
+  border-top: 1px solid var(--notes-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--notes-space-2);
+}
+
+.pulse-dialog__answer-text {
+  margin: 0;
+  font-size: var(--notes-text-base);
+  line-height: 1.6;
+  color: var(--notes-text-primary);
+  white-space: pre-wrap;
+}
+
+.pulse-dialog__grounding {
+  margin: 0;
+  font-size: var(--notes-text-xs);
+  color: var(--notes-text-tertiary);
+}

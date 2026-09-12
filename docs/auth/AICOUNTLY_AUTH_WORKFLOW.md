@@ -83,6 +83,41 @@ with the portal seeing this server's IP instead of the caller's.
 `GET /api/session` is the one protected endpoint, and exists so the flow can be
 verified end to end in each environment.
 
+## The portal must know about `notes` first
+
+Everything above assumes the portal has this product registered. It is a
+prerequisite, not a detail, and its failure mode looks like a bug in Notes.
+
+Registered on **`my.aicountly.com`**, not here:
+
+| | |
+|---|---|
+| App id / jumpKey | `notes` |
+| Production host | `notes.aicountly.com` |
+| Sandbox host | `notes.gh.aicountly.com` |
+| Auth callbacks | `https://notes.aicountly.com/auth/callback`, `https://notes.gh.aicountly.com/auth/callback`, `http://localhost:5173/auth/callback` |
+
+The callback URL must be in the portal's `PRODUCT_CALLBACKS`. Without it the jump
+returns **no `auth_token`**, the SPA cannot mint a `ses_key`, and every `/api/*`
+call fails — while Notes itself is deployed correctly and has nothing in its logs
+to show for it.
+
+**A blank page at `my.aicountly.com/login/authentication_jump/notes` means the
+portal does not handle this jumpKey yet.** The redirect from Notes is correct;
+`authentication_jump()` is falling through with an empty body. That is fixed on
+the portal, not here. Until it is deployed, the login form can be opened
+directly, which confirms the rest of the chain works:
+
+```
+https://my.aicountly.com/login?returnUrl=https%3A%2F%2Fnotes.aicountly.com%2Fauth%2Fcallback
+```
+
+You will still not receive an `auth_token` back until `authentication_jump/notes`
+is registered.
+
+(Confirmed against `docs/MY_AICOUNTLY_REGISTRATION.md` in `aicountly/pulse-aicountly`,
+which hit exactly this on its own rename.)
+
 ## Verifying an environment
 
 ```bash

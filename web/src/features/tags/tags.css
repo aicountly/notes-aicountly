@@ -1,0 +1,158 @@
+/* ---------------------------------------------------------------------------
+ * Tags.
+ *
+ * Tags are shown as a wrapping rail of chips rather than a list of rows: a
+ * label is short, there are usually many, and a column of forty one-word rows
+ * pushes everything below it off the screen.
+ * ------------------------------------------------------------------------- */
+
+.tag-rail { display: flex; flex-wrap: wrap; gap: var(--notes-space-1); padding: 0 var(--notes-space-2); }
+
+.tag-chip,
+.tag-rail__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px var(--notes-space-2);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-pill);
+  background: var(--notes-surface-secondary);
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.tag-rail__chip:hover { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+
+/* The active tag is tinted *and* outlined: on a rail of chips the tint alone
+   is easy to miss, and colour is never the only signal. */
+.tag-rail__chip--active {
+  background: var(--notes-primary-soft);
+  border-color: var(--notes-primary-border);
+  color: var(--notes-primary-active);
+}
+
+.tag-rail__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-rail__count { color: var(--notes-text-tertiary); font-variant-numeric: tabular-nums; font-weight: 500; }
+
+.tag-rail__more {
+  border: 0;
+  background: transparent;
+  color: var(--notes-text-secondary);
+  font-size: var(--notes-text-xs);
+  font-weight: 600;
+  padding: 3px var(--notes-space-2);
+  border-radius: var(--notes-radius-pill);
+  cursor: pointer;
+}
+.tag-rail__more:hover { background: var(--notes-surface-hover); color: var(--notes-text-primary); }
+
+/* --- The picker ----------------------------------------------------------- */
+
+.tag-picker { position: relative; }
+
+.tag-picker__box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--notes-space-1);
+  padding: 5px var(--notes-space-2);
+  border: 1px solid var(--notes-border-strong);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+}
+.tag-picker__box:focus-within { border-color: var(--notes-focus-ring); }
+.tag-picker__box--disabled { opacity: 0.6; }
+
+.tag-picker__chips { display: contents; list-style: none; margin: 0; padding: 0; }
+
+.tag-chip { background: var(--notes-primary-soft); border-color: var(--notes-primary-border); color: var(--notes-primary-active); cursor: default; }
+
+.tag-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--notes-radius-pill);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.tag-chip__remove:hover { background: var(--notes-surface-hover); }
+
+.tag-picker__input {
+  flex: 1 1 8ch;
+  min-width: 8ch;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--notes-text-primary);
+  font-size: var(--notes-text-sm);
+  padding: 2px 0;
+}
+.tag-picker__input::placeholder { color: var(--notes-text-tertiary); }
+/* At the tag limit the field stays in the document — see TagPicker — so it has
+   to read as unavailable rather than merely empty. */
+.tag-picker__input:disabled { cursor: not-allowed; }
+
+.tag-picker__list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: var(--notes-z-dropdown);
+  margin: 4px 0 0;
+  padding: var(--notes-space-1);
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-md);
+  background: var(--notes-surface-raised);
+  box-shadow: var(--notes-shadow-lg);
+}
+
+.tag-picker__option {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: 5px var(--notes-space-2);
+  border-radius: var(--notes-radius-xs);
+  font-size: var(--notes-text-sm);
+  cursor: pointer;
+}
+.tag-picker__option--active { background: var(--notes-primary-soft); }
+.tag-picker__option-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-picker__option-count { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); font-variant-numeric: tabular-nums; }
+
+.tag-picker__status { padding: var(--notes-space-2); font-size: var(--notes-text-sm); color: var(--notes-text-tertiary); }
+.tag-picker__status--error { color: var(--notes-danger); }
+
+/* --- Managing ------------------------------------------------------------- */
+
+.tag-manager { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--notes-space-1); max-height: 340px; overflow-y: auto; }
+
+.tag-manager__row {
+  display: flex;
+  align-items: center;
+  gap: var(--notes-space-2);
+  padding: var(--notes-space-2);
+  border: 1px solid var(--notes-border);
+  border-radius: var(--notes-radius-sm);
+  background: var(--notes-surface);
+}
+.tag-manager__row--editing { flex-wrap: wrap; }
+.tag-manager__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--notes-text-sm); font-weight: 550; }
+.tag-manager__count { font-size: var(--notes-text-xs); color: var(--notes-text-tertiary); font-variant-numeric: tabular-nums; }
+.tag-manager__editor { display: flex; flex-direction: column; gap: var(--notes-space-2); width: 100%; }
+.tag-manager__actions { display: flex; gap: var(--notes-space-2); flex-wrap: wrap; }
+.tag-manager__confirm { flex: 1 1 100%; margin: 0; font-size: var(--notes-text-sm); color: var(--notes-danger); }
+
+.tag-create { display: flex; gap: var(--notes-space-2); align-items: flex-end; }
+.tag-create .org-field { flex: 1; }

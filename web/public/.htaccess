@@ -32,6 +32,13 @@
   <FilesMatch "^index\.html$">
     Header set Cache-Control "no-cache, no-store, must-revalidate"
   </FilesMatch>
+
+  # The service worker and the manifest are NOT hashed, so the year-long rule
+  # above would pin them forever: the browser would keep asking the old worker
+  # for the shell and never see a deploy. Both must revalidate every time.
+  <FilesMatch "^(sw\.js|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
 </IfModule>
 
 # --- Compression -----------------------------------------------------------
