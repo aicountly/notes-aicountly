@@ -226,7 +226,9 @@ export function useCreateNote() {
     },
     onSuccess: (note) => {
       client.setQueryData(queryKeys.notes.detail(note.id), note)
-      void client.invalidateQueries({ queryKey: queryKeys.notes.all })
+      // The lists and the badges: a new note changes both. Not `['notes']`,
+      // which would also refetch the note just created.
+      void client.invalidateQueries({ queryKey: queryKeys.notes.lists })
       void client.invalidateQueries({ queryKey: queryKeys.notes.counts })
     },
   })
@@ -267,7 +269,14 @@ export function useUpdateNote() {
     },
     onSuccess: (note) => {
       client.setQueryData(queryKeys.notes.detail(note.id), note)
-      void client.invalidateQueries({ queryKey: queryKeys.notes.all })
+      // Lists, not `['notes']`. That key is a PREFIX of
+      // `['notes','detail',id]`, so invalidating it threw away the fresh note
+      // set on the line above and fetched it again — on every autosave, which
+      // is every 1.2 seconds of typing, for the note being typed into. Every
+      // mounted list went with it. The title and excerpt a list shows do
+      // change on a save, so the lists are still refreshed; the open note is
+      // already in hand.
+      void client.invalidateQueries({ queryKey: queryKeys.notes.lists })
     },
   })
 }

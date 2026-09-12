@@ -41,8 +41,23 @@ import type { GrantableRole, NoteMemberRow } from '../hooks/useMembers'
 import '../../organise/organise.css'
 import '../collaboration.css'
 
+/**
+ * What this dialog needs to know about a note.
+ *
+ * Narrower than {@link Note} on purpose: a note list holds summaries, not
+ * whole notes, and requiring the full shape is part of why nothing opened
+ * this dialog for so long. `Note` satisfies it structurally, so the editor
+ * pane passes its note straight through.
+ */
+export interface ShareTarget {
+  id: string
+  display_title: string
+  privacy_mode: string
+  capabilities: { manage_members: boolean }
+}
+
 export interface ShareDialogProps {
-  note: Note
+  note: ShareTarget
   open: boolean
   onClose: () => void
 }

@@ -169,7 +169,7 @@ would survive sign-out and be readable by the next person to use the browser.
 ## Feature flags, and honesty
 
 Every capability that depends on something outside this repository — Pulse,
-Drive, Calendar, Contacts, Connect, OCR, transcription, pgvector, realtime,
+Drive, Calendar, Contacts, Connect, OCR, transcription, pgvector,
 canvas, E2E private notes — is behind a flag in `Features.php` and **defaults to
 off**. A flag also stays off when its dependency is unconfigured, so switching on
 `NOTES_AI_ENABLED` without a `PULSE_API_URL` does not produce a UI full of

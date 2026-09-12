@@ -52,7 +52,16 @@ export const queryKeys = {
   session: ['session'] as const,
 
   notes: {
+    /** Everything note-shaped. Coarse on purpose: use it to clear, not to refresh. */
     all: ['notes'] as const,
+    /**
+     * Every list, and nothing else.
+     *
+     * `all` is a prefix of `detail` too, so invalidating it to refresh the
+     * sidebar also refetches whichever note is open — which on an autosave
+     * means re-fetching the note being typed into, seconds after saving it.
+     */
+    lists: ['notes', 'list'] as const,
     list: (filters: Record<string, unknown>) => ['notes', 'list', filters] as const,
     detail: (id: string) => ['notes', 'detail', id] as const,
     counts: ['notes', 'counts'] as const,

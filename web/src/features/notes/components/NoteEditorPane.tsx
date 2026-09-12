@@ -12,7 +12,7 @@
  */
 
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { Icon } from '../../../shared/ui/Icon'
 import { Badge, Button, EmptyState, Skeleton } from '../../../shared/ui/primitives'
@@ -38,7 +38,11 @@ import { useImageUploader, useImageSrcLoader } from '../../attachments/hooks/use
 const loadEditor = () => import('../../editor/NoteEditor')
 const NoteEditor = lazy(() => loadEditor().then((module) => ({ default: module.NoteEditor })))
 import { useCreateNote, useNote, useNoteFlag } from '../hooks/useNotes'
+import { NOTE_TYPES } from '../../../shared/api/types'
+import type { NoteType } from '../../../shared/api/types'
 import { NoteInfoPanel } from './NoteInfoPanel'
+import { AttachmentList } from '../../attachments/components/AttachmentList'
+import { ShareDialog } from '../../collaboration/components/ShareDialog'
 import { NoteMenu, daysUntilPurge } from './NoteCard'
 
 export interface NoteEditorPaneProps {
@@ -68,6 +72,7 @@ export function NoteEditorPane({
   canCreate = true,
 }: NoteEditorPaneProps) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const config = useAppConfig()
   const create = useCreateNote()
   const flag = useNoteFlag()
@@ -84,6 +89,7 @@ export function NoteEditorPane({
   const loadImageSrc = useImageSrcLoader()
 
   const [infoOpen, setInfoOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   // Pin and favourite are optimistic; without this the only sign of a refused
   // change is the icon quietly flipping back.
@@ -133,15 +139,24 @@ export function NoteEditorPane({
     if (startedCreate.current) return
     startedCreate.current = true
 
+    // `/notes/new?type=checklist` is the PWA's "New checklist" shortcut
+    // (manifest.webmanifest). The parameter was read by nothing, so the
+    // shortcut made an ordinary note and the difference existed only in the
+    // launcher menu.
+    const requested = searchParams.get('type')
+    const noteType = requested !== null && NOTE_TYPES.includes(requested as NoteType)
+      ? (requested as NoteType)
+      : undefined
+
     create
-      .mutateAsync({ notebook_id: notebookId })
+      .mutateAsync({ notebook_id: notebookId, note_type: noteType })
       .then((created) => navigate(`${basePath}/${created.id}`, { replace: true }))
       // Left flagged as started: retrying automatically would loop against a
       // server that is refusing the create.
       .catch((reason: unknown) =>
         setCreateError(reason instanceof Error ? reason.message : 'That note could not be created.'),
       )
-  }, [noteId, notebookId, basePath, canCreate, createAttempt, create, navigate])
+  }, [noteId, notebookId, basePath, canCreate, createAttempt, create, navigate, searchParams])
 
   if (noteId === null) {
     return (
@@ -298,6 +313,21 @@ export function NoteEditorPane({
             </>
           ) : null}
 
+          {/* Sharing had no way in at all: the dialog was written, styled and
+              tested, and the only control that mentioned sharing opened the
+              operating system's share sheet — which passes a URL to somebody
+              who cannot open the note. */}
+          {capabilities.share && open.privacy_mode === 'standard' ? (
+            <Button
+              icon="share"
+              iconOnly
+              variant="ghost"
+              size="sm"
+              aria-label="Share this note"
+              onClick={() => setShareOpen(true)}
+            />
+          ) : null}
+
           <Button
             icon="info"
             iconOnly
@@ -336,10 +366,17 @@ export function NoteEditorPane({
           <Suspense fallback={<EditorSkeleton />}>
             <NoteEditor note={open} uploadImage={uploadImage} loadImageSrc={loadImageSrc} />
           </Suspense>
+
+          {/* Under the document, where an attachment belongs: this is the
+              surface that adds, previews and removes them. The info panel's
+              list is a glance and a download, and reads the same query. */}
+          <AttachmentList noteId={open.id} capabilities={capabilities} />
         </div>
 
         {infoOpen ? <NoteInfoPanel note={open} onClose={() => setInfoOpen(false)} /> : null}
       </div>
+
+      <ShareDialog note={open} open={shareOpen} onClose={() => setShareOpen(false)} />
     </section>
   )
 }

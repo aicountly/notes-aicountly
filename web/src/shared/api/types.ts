@@ -79,14 +79,17 @@ export const EMPTY_DOCUMENT: NoteDocument = { type: 'doc', content: [] }
 // Notes
 // ---------------------------------------------------------------------------
 
-export type NoteType =
-  | 'document'
-  | 'checklist'
-  | 'voice'
-  | 'meeting'
-  | 'drawing'
-  | 'canvas'
-  | 'scan'
+export const NOTE_TYPES = [
+  'document',
+  'checklist',
+  'voice',
+  'meeting',
+  'drawing',
+  'canvas',
+  'scan',
+] as const
+
+export type NoteType = (typeof NOTE_TYPES)[number]
 
 export type NoteColor =
   | 'coral' | 'peach' | 'sand' | 'sage' | 'mint'
@@ -400,7 +403,6 @@ export interface FeatureFlags {
   semantic_search: boolean
   ocr: boolean
   transcription: boolean
-  realtime: boolean
   canvas: boolean
   private_notes: boolean
   drive: boolean

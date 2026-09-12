@@ -86,25 +86,23 @@ are listed separately as **unverified** — they are leads, not conclusions.
 None. Every finding the verify pass confirmed has been fixed, and each one has
 a test that fails without its fix. What is left is the unverified list below.
 
-### Open findings, from verifying the audit's leads
+### The audit's leads, verified and closed
 
 The fourteen leads the audit could not verify — its verifiers ran out of quota
-mid-run — have since been checked against the code by hand. Three did not
-survive, two had already been closed by other work, and the rest are real.
-They are listed here rather than fixed because two of them are missing
-features rather than defects, and that is a decision to take deliberately.
+mid-run — were checked against the code by hand. Three did not survive, two had
+already been closed by other work, and the remaining nine are fixed:
 
-| Sev | Finding | Evidence |
-|---|---|---|
-| High | **A note cannot be shared with anyone.** `ShareDialog` is complete, styled and tested, and nothing renders it. The note menu's "Share…" calls `navigator.share()` — the OS share sheet — which passes a *URL* to someone who has no access to the note; it never opens the dialog. Roles, members, the API and its tests are all unreachable from the product. | `NoteCard.tsx:263`, `ShareDialog.tsx` has no caller |
-| Medium | **The attachments UI is dead code.** `AttachmentBlock` and `AttachmentList` are rendered nowhere. The info panel lists attachments in its own markup, so previews, processing state and per-file actions ship unused. | no import of either outside their own files |
-| Medium | **Every autosave refetches the note being typed into.** `onSuccess` invalidates `['notes']`, which is a prefix of `['notes','detail',id]` and of every list — so each save discards the fresh copy it was just handed and asks for it again, along with every mounted list. | `useNotes.ts`, `queryKeys.notes.all` |
-| Medium | **A download buffers the whole file in PHP memory.** `LocalObjectStore::stream()` uses `readfile()`, which streams — and the controller wraps it in `ob_start()` to measure `Content-Length`, so a 25 MB attachment is 25 MB of memory per concurrent download on a host whose limit is typically 128 MB. | `AttachmentsController::download` |
-| Medium | **The service worker applies a new build without asking**, contradicting `OFFLINE_SYNC.md` and the app's own "Update available" prompt. `install` calls `skipWaiting()` and `activate` calls `clients.claim()`, so `registration.waiting` is empty and `applyUpdate()` has nothing to post to. Activate also deletes the old cache, which can strand a lazily-loaded chunk an open page has not fetched yet. | `sw.js:26,34` vs `registerServiceWorker.ts:41` |
-| Medium | **`realtime` is a flag with nothing behind it.** No WebSocket, no EventSource, no polling; nothing reads it. Settings offers to turn on "Edits and presence from other people as they happen", and switching it on changes nothing at all. | `Features.php:25`, no implementation anywhere |
-| Low | **Local development cannot reach the API by following the README.** Step 2 says `cp ../.env.example ../.env` from inside `web/`, which writes the repo root — but Vite's root is `web/` and there is no `envDir`, so it never reads that file. With `VITE_API_BASE_URL` unset the app calls `http://localhost:5173/api`, the dev server, which answers with index.html. | `README.md:70`, `vite.config.ts` |
-| Low | **The README promises two editor triggers that do not exist.** `/` is real; `[[` and `#` are not — the only suggestion characters registered are `/` and `@`. Linking a note works from the slash menu; tagging has no trigger at all. | `README.md:18`, `slashCommand.ts:41`, `mention.ts:91` |
-| Low | **The PWA "New checklist" shortcut makes an ordinary note.** `?type=checklist` is never read; the create call passes only `notebook_id`. | `manifest.webmanifest:18`, `NoteEditorPane.tsx:136` |
+| What was wrong | Where |
+|---|---|
+| **A note could not be shared with anyone.** `ShareDialog` was complete, styled and tested, and nothing rendered it; the note menu's "Share…" opened the OS share sheet, which passes a URL to someone the server will refuse. It is mounted now, from the note menu and from a control in the editor header. | `NoteCard.tsx`, `NoteEditorPane.tsx` |
+| **The attachments surface was dead code.** `AttachmentList` — upload, capture, Drive linking, previews, removal — was rendered nowhere. It now sits under the document, where an attachment belongs. | `NoteEditorPane.tsx` |
+| **Every autosave refetched the note being typed into.** `['notes']` is a prefix of `['notes','detail',id]`, so invalidating it discarded the fresh copy the mutation had just been handed. Lists and counts are invalidated on their own key. | `useNotes.ts`, `queryClient.ts` |
+| **A download held the whole file in memory.** `readfile()` streams; `ob_start()` around it to measure `Content-Length` undid that, so a 25 MB attachment was 25 MB of PHP memory. The length comes from the row and the body is written as it is read. | `Response::stream`, `AttachmentsController` |
+| **The service worker applied a new build without asking**, contradicting both the docs and the app's own "Update available" prompt. `install` no longer calls `skipWaiting()`, so the prompt has a waiting worker to act on. | `sw.js` |
+| **`realtime` was a flag with nothing behind it** — no WebSocket, no polling, nothing reading it, and Settings offering to switch on "edits and presence as they happen". Removed. `canvas` stays: it is enforced server-side and gates real controls. | `Features.php`, `features.ts` |
+| **Local development could not reach the API by following the README.** The documented copy wrote `.env` to the repo root; Vite reads `web/`. | `README.md` |
+| **The README promised two editor triggers that do not exist** — `[[` and `#`. The real ones are `/` and `@`, and tags are added from the info panel. | `README.md` |
+| **The PWA "New checklist" shortcut made an ordinary note.** `?type=checklist` is read now. | `NoteEditorPane.tsx` |
 
 ### Leads that did not survive
 

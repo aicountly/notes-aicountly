@@ -24,12 +24,17 @@ import type { NoteSummary } from '../../../shared/api/types'
 // one is not part of what a card does.
 vi.mock('../../../auth/portal', () => ({ ensureSesKey: async () => 'test-session-key' }))
 
+// The sharing dialog marks which member is you.
+vi.mock('../../../auth/AuthProvider', () => ({
+  useAuth: () => ({ profile: { user_id: 'user-1', display_name: 'Me' } }),
+}))
+
 const CONFIG = {
   app: 'Notes',
   env: 'test',
   features: {
     ai: false, semantic_search: false, ocr: false, transcription: false,
-    realtime: false, canvas: false, private_notes: false, drive: false,
+    canvas: false, private_notes: false, drive: false,
     calendar: false, contacts: false, connect: false,
   },
   limits: { max_attachment_bytes: 1024, trash_retention_days: 14 },
@@ -190,5 +195,24 @@ describe('NoteCard', () => {
         ),
       ).toBe(true),
     )
+  })
+})
+
+describe('sharing a note', () => {
+  it('opens the sharing dialog rather than the operating system share sheet', async () => {
+    const user = userEvent.setup()
+    // A share sheet would pass a URL to whoever is picked — and the server
+    // refuses them, because nothing granted them access. This is the control
+    // that grants it, and until now nothing in the app rendered it.
+    const osShare = vi.fn()
+    vi.stubGlobal('navigator', { ...navigator, share: osShare })
+
+    renderCard(makeNote({ role: 'owner' }))
+
+    await user.click(screen.getByRole('button', { name: /actions for quarterly review/i }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Share…' }))
+
+    expect(await screen.findByRole('dialog', { name: /share/i })).toBeInTheDocument()
+    expect(osShare).not.toHaveBeenCalled()
   })
 })

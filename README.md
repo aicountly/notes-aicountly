@@ -15,8 +15,9 @@ something searchable and actionable.
 
 Create a note in about two seconds, from a composer that is one line until you
 need more. Write in a real editor — headings, checklists, tables, callouts, code,
-images, attachments — with `/` for blocks, `[[` to link another note and `#` for
-tags. Nothing is ever saved by hand.
+images, attachments — with `/` for blocks and for linking another note, and `@`
+to mention someone the note is shared with. Tags are added from the note's info
+panel. Nothing is ever saved by hand.
 
 File notes into nested notebooks, tag them, pin them, colour them, or leave them
 where they land and find them again by searching. Smart folders are saved
@@ -67,7 +68,7 @@ php -S localhost:8000
 # 2. The app
 cd ../web
 npm install
-cp ../.env.example ../.env    # point VITE_API_BASE_URL at http://localhost:8000
+cp ../.env.example .env       # into web/, which is where Vite reads it
 npm run dev
 ```
 
@@ -111,7 +112,7 @@ Two `.env` files that work in opposite ways, and the difference matters:
 
 | File | Read | Used by |
 | --- | --- | --- |
-| `.env.example` | **Build time**, inlined into the bundle | `web/` |
+| `.env.example` (repo root; copy to `web/.env`) | **Build time**, inlined into the bundle | `web/` |
 | `server-php/.env.example` | **Runtime**, on every request | `server-php/` |
 
 Vite inlines every `VITE_*` value when the app is compiled, so **treat every one
@@ -123,7 +124,7 @@ request, so that file lives on the server and only on the server.
 
 Every capability that depends on something outside this repository — Pulse,
 Drive, Calendar, Contacts, Connect, OCR, transcription, semantic search,
-realtime, canvas, end-to-end encrypted notes — is behind a flag and **defaults to
+canvas, end-to-end encrypted notes — is behind a flag and **defaults to
 off**. A flag also stays off when its dependency is unconfigured, so switching on
 `NOTES_AI_ENABLED` without a `PULSE_API_URL` cannot produce a UI full of buttons
 that fail when pressed.

@@ -175,17 +175,26 @@ final class AttachmentsController
             return (new Response(302, null))->withHeader('Location', $signed);
         }
 
-        ob_start();
-        try {
-            $store->stream($key);
-        } catch (\Throwable $e) {
-            ob_end_clean();
-            throw $e;
+        // Checked before a single header goes out, because once the body has
+        // started there is no way to answer 404 instead — and this is the one
+        // failure that is likely: a row whose object a purge already removed.
+        if (!$store->exists($key)) {
+            throw ApiException::notFound('That file');
         }
 
-        return (new Response(200, null))
+        // Streamed, not buffered. `LocalObjectStore::stream()` is `readfile()`,
+        // which hands the file to the client in chunks; wrapping it in
+        // `ob_start()` to measure Content-Length — which is what this did —
+        // pulled all 25 MB of a large attachment into PHP memory first. The
+        // length comes from the row instead, which has recorded it since the
+        // upload.
+        $size = $attachment['byte_size'] ?? null;
+
+        return Response::stream(
+            static fn () => $store->stream($key),
+            is_numeric($size) ? (int) $size : null,
+        )
             ->withHeader('Content-Type', (string) $attachment['mime_type'])
-            ->withHeader('Content-Length', (string) ob_get_length())
             ->withHeader('Content-Disposition', self::disposition((string) $attachment['filename']))
             ->withHeader('X-Content-Type-Options', 'nosniff');
     }

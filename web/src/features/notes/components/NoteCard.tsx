@@ -22,6 +22,7 @@ import type { IconName } from '../../../shared/ui/Icon'
 import { Button, Dialog, LiveStatus } from '../../../shared/ui/primitives'
 import { ApiError, api } from '../../../shared/api/client'
 import { queryKeys } from '../../../shared/query/queryClient'
+import { ShareDialog } from '../../collaboration/components/ShareDialog'
 import { useAppConfig } from '../../../app/AppConfigProvider'
 import {
   useDuplicateNote,
@@ -161,6 +162,7 @@ export function NoteMenu({ note, to, onRemoved, size = 'sm' }: NoteMenuProps) {
   const [view, setView] = useState<'root' | 'colour'>('root')
   const [above, setAbove] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [sharing, setSharing] = useState(false)
   const [movingNotebook, setMovingNotebook] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState('')
@@ -260,19 +262,18 @@ export function NoteMenu({ note, to, onRemoved, size = 'sm' }: NoteMenuProps) {
     }
   }
 
-  const share = async () => {
-    const url = `${window.location.origin}${to}`
-    if (typeof navigator.share === 'function') {
-      try {
-        await navigator.share({ title: note.display_title, url })
-        close()
-      } catch (reason) {
-        // Dismissing the system sheet is a decision, not a failure.
-        if ((reason as Error)?.name !== 'AbortError') setError(describeError(reason))
-      }
-      return
-    }
-    await copyLink()
+  /**
+   * Open the sharing dialog.
+   *
+   * This used to call `navigator.share()` — the operating system's share
+   * sheet — which passes a URL to whoever the user picks. That is not sharing
+   * a note: the recipient opens the link and the server refuses them, because
+   * nothing granted them access. Handing out an address is what "Copy link"
+   * is for, and it sits directly below this.
+   */
+  const share = () => {
+    setSharing(true)
+    close()
   }
 
   const actions: MenuAction[] = []
@@ -343,7 +344,7 @@ export function NoteMenu({ note, to, onRemoved, size = 'sm' }: NoteMenuProps) {
     // A private note holds ciphertext the server cannot read, so there is
     // nothing useful to hand to anyone else.
     if (capabilities.share && note.privacy_mode === 'standard') {
-      actions.push({ key: 'share', label: 'Share…', icon: 'share', run: () => void share() })
+      actions.push({ key: 'share', label: 'Share…', icon: 'share', run: share })
     }
 
     actions.push({ key: 'copy-link', label: 'Copy link', icon: 'link', run: () => void copyLink() })
@@ -444,6 +445,24 @@ export function NoteMenu({ note, to, onRemoved, size = 'sm' }: NoteMenuProps) {
 
       {/* Mounted only while open: a dialog per card, times forty cards, is
           forty idle mutation hooks the list does not need. */}
+      {/* Same reasoning as the delete dialog below: mounted only while open,
+          because a sharing dialog per card is a members query per card. */}
+      {sharing ? (
+        <ShareDialog
+          open
+          note={{
+            id: note.id,
+            display_title: note.display_title,
+            privacy_mode: note.privacy_mode,
+            capabilities,
+          }}
+          onClose={() => {
+            setSharing(false)
+            triggerRef.current?.focus()
+          }}
+        />
+      ) : null}
+
       {confirmingDelete ? (
         <ConfirmPurgeDialog
           note={note}

@@ -44,7 +44,6 @@ const ALL_OFF: FeatureFlags = {
   semantic_search: false,
   ocr: false,
   transcription: false,
-  realtime: false,
   canvas: false,
   private_notes: false,
   drive: false,

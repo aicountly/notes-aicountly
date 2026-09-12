@@ -50,7 +50,7 @@ const CONFIG = {
   env: 'production',
   features: {
     ai: true, semantic_search: false, ocr: false, transcription: false,
-    realtime: false, canvas: false, private_notes: false, drive: false,
+    canvas: false, private_notes: false, drive: false,
     calendar: false, contacts: false, connect: false,
   },
   limits: { max_attachment_bytes: 26214400, trash_retention_days: 30 },

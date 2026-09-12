@@ -22,8 +22,15 @@ self.addEventListener('install', (event) => {
       .open(VERSION)
       // addAll rejects the whole install if one entry 404s; each is added
       // individually so a missing icon cannot stop the worker installing.
-      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(url))))
-      .then(() => self.skipWaiting()),
+      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(url)))),
+    // Deliberately NOT skipWaiting(). The app watches for a waiting worker and
+    // offers "Update available"; applyUpdate() then posts `skip-waiting` and
+    // reloads. Skipping here made that promise undeliverable — the new worker
+    // activated on its own, `registration.waiting` was empty so the prompt had
+    // nothing to post to, and `activate` deletes the previous cache version,
+    // which can strand a lazily-loaded chunk an open page has not fetched yet.
+    // A reload under someone mid-sentence is exactly what OFFLINE_SYNC.md says
+    // does not happen.
   )
 })
 

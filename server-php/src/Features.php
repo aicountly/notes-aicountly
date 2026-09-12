@@ -8,7 +8,7 @@ namespace Aicountly\Api;
  * Feature flags.
  *
  * Every capability that depends on something outside this repository — Pulse,
- * Drive, an OCR engine, pgvector, a realtime server — is gated here and
+ * Drive, an OCR engine, pgvector — is gated here and
  * defaults to **off**. The API answers `FEATURE_DISABLED` for a flag that is
  * off, and the frontend reads the same flags from `GET /api/config` so it can
  * hide the control rather than render a button that fails when pressed.
@@ -22,7 +22,6 @@ final class Features
     public const SEMANTIC_SEARCH = 'semantic_search';
     public const OCR = 'ocr';
     public const TRANSCRIPTION = 'transcription';
-    public const REALTIME = 'realtime';
     public const CANVAS = 'canvas';
     public const PRIVATE_NOTES = 'private_notes';
     public const DRIVE = 'drive';
@@ -36,7 +35,6 @@ final class Features
         self::SEMANTIC_SEARCH => 'NOTES_SEMANTIC_SEARCH_ENABLED',
         self::OCR => 'NOTES_OCR_ENABLED',
         self::TRANSCRIPTION => 'NOTES_TRANSCRIPTION_ENABLED',
-        self::REALTIME => 'NOTES_REALTIME_ENABLED',
         self::CANVAS => 'NOTES_CANVAS_ENABLED',
         self::PRIVATE_NOTES => 'NOTES_PRIVATE_NOTES_ENABLED',
         self::DRIVE => 'NOTES_DRIVE_ENABLED',

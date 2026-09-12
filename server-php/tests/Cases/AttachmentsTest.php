@@ -351,25 +351,55 @@ final class AttachmentsTest extends TestCase
         $attachment = $this->upload($this->alice, $note['id'], 'screenshot.png', $bytes)['body']['data'];
 
         $result = $this->alice->get($attachment['content_url']);
-        // The handler writes the body into an output buffer so Response::send()
-        // still owns the headers; this is that buffer.
-        $streamed = (string) ob_get_clean();
-
         $this->assertSame(200, $result['status']);
-        $this->assertSame($bytes, $streamed, 'the bytes come back unchanged');
 
-        // The headers are not visible through the router, so the same call is
-        // made directly to assert them.
+        // The body is written by Response::send(), not by the handler: the
+        // handler hands back a writer so the file is streamed to the client
+        // rather than held in memory to be measured. So the bytes are captured
+        // around the send.
         $response = $this->downloadDirectly(Support::user('a'), $note['id'], $attachment['id']);
         $headers = self::headersOf($response);
-        ob_end_clean();
 
+        ob_start();
+        $response->send();
+        $streamed = (string) ob_get_clean();
+
+        $this->assertSame($bytes, $streamed, 'the bytes come back unchanged');
         $this->assertSame(200, $response->status);
         $this->assertSame('image/png', $headers['Content-Type']);
+        // From the row, which has recorded it since the upload — not from a
+        // buffer holding the whole file.
         $this->assertSame((string) strlen($bytes), $headers['Content-Length']);
         $this->assertSame('nosniff', $headers['X-Content-Type-Options']);
         // Never inline: an uploaded file must not be rendered as a page here.
         $this->assertContainsString('attachment; filename="screenshot.png"', $headers['Content-Disposition']);
+    }
+
+    /**
+     * The handler hands back a writer; it does not hold the file.
+     *
+     * This is the whole of the fix, and it is observable: after `download()`
+     * returns, nothing has been written yet. It used to `ob_start()` around
+     * the read so `Content-Length` could be measured from the buffer, which
+     * meant a 25 MB attachment — the documented maximum — occupied 25 MB of
+     * PHP memory before a byte reached the client, on hosts whose
+     * `memory_limit` is typically 128 MB.
+     */
+    public function testTheHandlerDoesNotHoldTheFileInMemory(): void
+    {
+        $note = $this->note();
+        $bytes = self::png();
+        $attachment = $this->upload($this->alice, $note['id'], 'big.png', $bytes)['body']['data'];
+
+        ob_start();
+        $response = $this->downloadDirectly(Support::user('a'), $note['id'], $attachment['id']);
+        $beforeSend = (string) ob_get_clean();
+
+        $this->assertSame('', $beforeSend, 'nothing is read until the response is sent');
+
+        // And the length is already known, from the row rather than from a
+        // buffer that has read the whole file.
+        $this->assertSame((string) strlen($bytes), self::headersOf($response)['Content-Length']);
     }
 
     public function testADownloadFilenameCannotBreakOutOfItsHeader(): void
@@ -388,7 +418,6 @@ final class AttachmentsTest extends TestCase
 
         $response = $this->downloadDirectly(Support::user('a'), $note['id'], $attachment['id']);
         $disposition = self::headersOf($response)['Content-Disposition'];
-        ob_end_clean();
 
         $this->assertFalse(str_contains($disposition, "\r"));
         $this->assertFalse(str_contains($disposition, "\n"));
