@@ -86,26 +86,41 @@ are listed separately as **unverified** — they are leads, not conclusions.
 None. Every finding the verify pass confirmed has been fixed, and each one has
 a test that fails without its fix. What is left is the unverified list below.
 
-### Unverified leads
+### Open findings, from verifying the audit's leads
 
-The verifier for each of these ran out of quota, so they have **not** been
-confirmed against the code. Treat them as the next session's starting list,
-not as defects.
+The fourteen leads the audit could not verify — its verifiers ran out of quota
+mid-run — have since been checked against the code by hand. Three did not
+survive, two had already been closed by other work, and the rest are real.
+They are listed here rather than fixed because two of them are missing
+features rather than defects, and that is a decision to take deliberately.
 
-- The attachments UI may be unmounted — nothing renders `AttachmentBlock`/`AttachmentList`
-- Nothing may render the Share dialog, despite sharing being role-gated throughout
-- `README` promises `[[` and `#` editor triggers
-- `OFFLINE_SYNC.md` promises service-worker behaviour that may not match `sw.js`
-- The `realtime` flag may have no implementation behind it
-- The documented cron command may not process what the docs say
-- The PWA "New checklist" shortcut may ignore its parameter
-- The transcription flag's "off" explanation may be inaccurate
-- `README`/`ARCHITECTURE` may point at documents that do not exist
-- The documented local-dev step may write `.env` incorrectly
-- Attachment download buffers the whole file into memory
-- Every autosave may invalidate the whole `['notes']` query key
-- `useNotebookOptions` and `useNotebooks` may share a key with different shapes
-- Semantic search's pgvector path may be documented beyond what it does
+| Sev | Finding | Evidence |
+|---|---|---|
+| High | **A note cannot be shared with anyone.** `ShareDialog` is complete, styled and tested, and nothing renders it. The note menu's "Share…" calls `navigator.share()` — the OS share sheet — which passes a *URL* to someone who has no access to the note; it never opens the dialog. Roles, members, the API and its tests are all unreachable from the product. | `NoteCard.tsx:263`, `ShareDialog.tsx` has no caller |
+| Medium | **The attachments UI is dead code.** `AttachmentBlock` and `AttachmentList` are rendered nowhere. The info panel lists attachments in its own markup, so previews, processing state and per-file actions ship unused. | no import of either outside their own files |
+| Medium | **Every autosave refetches the note being typed into.** `onSuccess` invalidates `['notes']`, which is a prefix of `['notes','detail',id]` and of every list — so each save discards the fresh copy it was just handed and asks for it again, along with every mounted list. | `useNotes.ts`, `queryKeys.notes.all` |
+| Medium | **A download buffers the whole file in PHP memory.** `LocalObjectStore::stream()` uses `readfile()`, which streams — and the controller wraps it in `ob_start()` to measure `Content-Length`, so a 25 MB attachment is 25 MB of memory per concurrent download on a host whose limit is typically 128 MB. | `AttachmentsController::download` |
+| Medium | **The service worker applies a new build without asking**, contradicting `OFFLINE_SYNC.md` and the app's own "Update available" prompt. `install` calls `skipWaiting()` and `activate` calls `clients.claim()`, so `registration.waiting` is empty and `applyUpdate()` has nothing to post to. Activate also deletes the old cache, which can strand a lazily-loaded chunk an open page has not fetched yet. | `sw.js:26,34` vs `registerServiceWorker.ts:41` |
+| Medium | **`realtime` is a flag with nothing behind it.** No WebSocket, no EventSource, no polling; nothing reads it. Settings offers to turn on "Edits and presence from other people as they happen", and switching it on changes nothing at all. | `Features.php:25`, no implementation anywhere |
+| Low | **Local development cannot reach the API by following the README.** Step 2 says `cp ../.env.example ../.env` from inside `web/`, which writes the repo root — but Vite's root is `web/` and there is no `envDir`, so it never reads that file. With `VITE_API_BASE_URL` unset the app calls `http://localhost:5173/api`, the dev server, which answers with index.html. | `README.md:70`, `vite.config.ts` |
+| Low | **The README promises two editor triggers that do not exist.** `/` is real; `[[` and `#` are not — the only suggestion characters registered are `/` and `@`. Linking a note works from the slash menu; tagging has no trigger at all. | `README.md:18`, `slashCommand.ts:41`, `mention.ts:91` |
+| Low | **The PWA "New checklist" shortcut makes an ordinary note.** `?type=checklist` is never read; the create call passes only `notebook_id`. | `manifest.webmanifest:18`, `NoteEditorPane.tsx:136` |
+
+### Leads that did not survive
+
+- **The documented cron does what it says.** `worker.php` runs `maintenance()`
+  (trash retention, rate-limit sweep, session expiry, stuck-job reaping) *and*
+  `run()`, which drains the processing queue — OCR, transcription, thumbnails,
+  text extraction and the rest.
+- **The transcription flag's "off" text is accurate.** "Audio is stored and
+  played back, but not transcribed" is exactly what happens: the upload is
+  accepted regardless and the job reports `skipped`.
+- **Every documentation link resolves.** All twelve markdown links in the
+  README and `docs/` point at files that exist.
+
+Two more were real when the audit ran and have since been fixed by other work
+in this branch: the notebook query-key collision, and semantic search being
+documented as a pgvector feature while nothing wrote an embedding.
 
 ## Known limitations, by design
 
