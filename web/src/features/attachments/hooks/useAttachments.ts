@@ -681,3 +681,40 @@ export function useAttachments(noteId: string | undefined): UseAttachmentsResult
     maxBytes,
   }
 }
+
+/**
+ * The bytes at an attachment URL, for a caller that has the URL and not the row.
+ *
+ * The editor is the caller that needs this: an image node carries the `src`
+ * that was stored in the document, not the {@link Attachment} it came from.
+ * Same fetch, same session, same reasoning as {@link fetchAttachmentBlob}.
+ */
+export function fetchAttachmentBytes(url: string, signal?: AbortSignal): Promise<Blob> {
+  return fetchBytes(url, signal)
+}
+
+/**
+ * A loader the editor can hand to its image nodes.
+ *
+ * Object URLs are revoked when the hook unmounts rather than per image: an
+ * editor holds its nodes for as long as the note is open, and revoking one
+ * while its `<img>` is still on screen blanks the picture.
+ */
+export function useImageSrcLoader(): (src: string, signal: AbortSignal) => Promise<string> {
+  const urls = useRef<string[]>([])
+
+  useEffect(
+    () => () => {
+      for (const url of urls.current) URL.revokeObjectURL(url)
+      urls.current = []
+    },
+    [],
+  )
+
+  return useCallback(async (src: string, signal: AbortSignal) => {
+    const blob = await fetchAttachmentBytes(src, signal)
+    const url = URL.createObjectURL(blob)
+    urls.current.push(url)
+    return url
+  }, [])
+}

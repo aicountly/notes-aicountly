@@ -63,6 +63,7 @@ import type { MentionItem } from './extensions/mention'
 import { NoteLink } from './extensions/noteLink'
 import { PasteHandling } from './extensions/pasteHandling'
 import type { ImageUploader } from './extensions/pasteHandling'
+import type { ImageSrcLoader } from './extensions/imageSrc'
 import { SlashCommandExtension } from './extensions/slashCommand'
 import { createSuggestionBridge } from './extensions/suggestionBridge'
 import './editor.css'
@@ -78,6 +79,14 @@ export interface NoteEditorProps {
    * attachments feature; without it, images can still be inserted by address.
    */
   uploadImage?: ImageUploader
+  /**
+   * Resolves a stored attachment `src` into something the DOM can load.
+   *
+   * Without it an uploaded image renders as a broken icon: the document holds
+   * the canonical attachment URL, which is behind the session's Bearer token,
+   * and an `<img>` sends no such header. See `extensions/imageSrc.ts`.
+   */
+  loadImageSrc?: ImageSrcLoader
 }
 
 const READ_ONLY_REASON: Record<string, string> = {
@@ -94,7 +103,13 @@ function asParagraphs(text: string) {
     .map((block) => ({ type: 'paragraph', content: [{ type: 'text', text: block }] }))
 }
 
-export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEditorProps) {
+export function NoteEditor({
+  note,
+  onSaved,
+  onOpenNote,
+  uploadImage,
+  loadImageSrc,
+}: NoteEditorProps) {
   const aiEnabled = useFeature('ai')
   const canEdit = note.capabilities.edit
   const queryClient = useQueryClient()
@@ -158,6 +173,8 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
 
   const uploadImageRef = useRef(uploadImage)
   uploadImageRef.current = uploadImage
+  const loadImageSrcRef = useRef(loadImageSrc)
+  loadImageSrcRef.current = loadImageSrc
 
   const availabilityRef = useRef({ ai: aiEnabled })
   availabilityRef.current = { ai: aiEnabled }
@@ -258,7 +275,16 @@ export function NoteEditor({ note, onSaved, onOpenNote, uploadImage }: NoteEdito
       TableRow,
       TableHeader,
       TableCell,
-      NoteImage.configure({ allowBase64: false }),
+      NoteImage.configure({
+        allowBase64: false,
+        // Through the ref, so the editor is not rebuilt when the pane
+        // re-renders with a new function identity.
+        loadSrc: (src, signal) => {
+          const load = loadImageSrcRef.current
+          if (!load) return Promise.reject(new Error('No image loader is configured.'))
+          return load(src, signal)
+        },
+      }),
       CharacterCount,
       Callout,
       DateChip,

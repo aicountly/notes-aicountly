@@ -17,7 +17,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Icon } from '../../../shared/ui/Icon'
 import { Badge, Button, EmptyState, Skeleton } from '../../../shared/ui/primitives'
 import { useAppConfig } from '../../../app/AppConfigProvider'
-import { useImageUploader } from '../../attachments/hooks/useAttachments'
+import { useImageUploader, useImageSrcLoader } from '../../attachments/hooks/useAttachments'
 
 /**
  * The editor arrives after the list, not before it.
@@ -78,6 +78,10 @@ export function NoteEditorPane({
   // pane is what knows which note is open; the editor stays a document
   // component that neither fetches nor uploads.
   const uploadImage = useImageUploader(note.data?.id)
+  // The document stores the canonical attachment URL, which no `<img>` can
+  // load on its own: it is behind the session's Bearer token. This fetches the
+  // bytes with the session and hands back an object URL.
+  const loadImageSrc = useImageSrcLoader()
 
   const [infoOpen, setInfoOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
@@ -324,7 +328,7 @@ export function NoteEditorPane({
       <div className="editor__pane-body">
         <div className="editor__pane-main">
           <Suspense fallback={<EditorSkeleton />}>
-            <NoteEditor note={open} uploadImage={uploadImage} />
+            <NoteEditor note={open} uploadImage={uploadImage} loadImageSrc={loadImageSrc} />
           </Suspense>
         </div>
 

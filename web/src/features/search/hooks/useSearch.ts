@@ -297,13 +297,24 @@ function flatten(notebooks: Notebook[], depth = 0): NotebookOption[] {
  * Both lookups are fetched only once something needs them — the filter panel
  * is opened, or a "go to" picker is entered. Loading every notebook and tag to
  * render a search box that may never be filtered is a request for nothing.
+ *
+ * **Flattened in `select`, not in `queryFn`.** `['notebooks']` is one cache
+ * entry shared with the sidebar tree and with every screen that needs a
+ * notebook's name, and they all expect the nested rows the API returns.
+ * Flattening before the cache stored `{id, name, depth}` objects under that
+ * key instead, so whichever query ran first decided what the others read: open
+ * this picker and the sidebar tree silently lost every child notebook, because
+ * the flattened rows have no `children`; mount the sidebar first and the
+ * picker listed only root notebooks, unindented. `select` transforms per
+ * reader and leaves the cache holding what everyone else came for.
  */
 export function useNotebookOptions(enabled: boolean): UseQueryResult<NotebookOption[], ApiError> {
-  return useQuery<NotebookOption[], ApiError>({
+  return useQuery<Notebook[], ApiError, NotebookOption[]>({
     queryKey: queryKeys.notebooks,
     enabled,
     staleTime: 5 * 60_000,
-    queryFn: async ({ signal }) => flatten(await api.get<Notebook[]>('/notebooks', { signal })),
+    queryFn: ({ signal }) => api.get<Notebook[]>('/notebooks', { signal }),
+    select: flatten,
   })
 }
 

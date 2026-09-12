@@ -64,15 +64,16 @@ are listed separately as **unverified** — they are leads, not conclusions.
 | Drive: a detached upload's bytes stayed in Drive for ever | `AttachmentService::driveDisposition` |
 | HEIC photos marked "corrupt" instead of skipped | `ThumbnailHandler` |
 | `.env.example` naming `NOTES_OCR_URL`, which nothing reads | `server-php/.env.example` |
+| Every uploaded image rendered as a broken icon: the document stores a Bearer-only URL and an `<img>` sends no such header | `extensions/image.ts`, `useImageSrcLoader` |
+| The notebook picker flattened the shared `['notebooks']` cache, so the sidebar tree lost its children — or the picker lost its nesting, depending which mounted first | `useSearch.ts` |
 
 ### Open findings
 
-Confirmed by the verify pass and **not yet fixed**. Ordered by severity.
+Confirmed by the verify pass and **not yet fixed**. Ordered by severity. Both
+findings the audit rated *high* have since been closed and moved above.
 
 | Sev | Finding | Where |
 |---|---|---|
-| High | Images pasted into a note render broken: the `src` points at a Bearer-only endpoint, so the browser's own `<img>` request is unauthenticated | `useAttachments.ts:364` |
-| High | "Go to notebook…" and the search Notebook filter share a query key with the notebook tree and receive the wrong data shape | `useSearch.ts:303` |
 | Medium | Attachment links in the Info panel open a 401 JSON envelope rather than the file | `NoteInfoPanel.tsx:166` |
 | Medium | The Share dialog invites by email address; the API stores the string as a user id and the grant never matches anyone | `ShareDialog.tsx:165` |
 | Medium | Duplicating a note shared with you 404s about a notebook you were never told about | `NotesService.php:449` |
