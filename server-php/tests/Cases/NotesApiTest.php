@@ -191,6 +191,143 @@ final class NotesApiTest extends TestCase
         $this->assertCount(0, $members, 'a duplicate must not silently re-share the note');
     }
 
+    /**
+     * Copying a note someone shared with you lands it somewhere you can reach.
+     *
+     * A shared note usually sits in the owner's notebook, and filing into a
+     * notebook needs edit rights on it — so carrying the notebook id over
+     * answered 404 naming a notebook the copier had never been told about and
+     * could do nothing with. The copy is theirs: it goes unfiled instead.
+     */
+    public function testDuplicatingASharedNoteDoesNotDemandTheOwnersNotebook(): void
+    {
+        $bob = new ApiClient(Support::user('b'));
+
+        $notebook = $this->api->post('/notebooks', ['name' => 'Alice private'])['body']['data'];
+        $note = $this->api->post('/notes', [
+            'title' => 'Playbook',
+            'document' => Support::doc('the original'),
+            'notebook_id' => $notebook['id'],
+        ])['body']['data'];
+
+        Connection::execute(
+            'INSERT INTO note_members (id, note_id, user_id, role, invited_by) VALUES (:id, :n, :u, \'viewer\', :i)',
+            ['id' => Uuid::v4(), 'n' => $note['id'], 'u' => Support::user('b')->userId, 'i' => Support::user('a')->userId],
+        );
+
+        $result = $bob->post('/notes/' . $note['id'] . '/duplicate');
+
+        $this->assertSame(201, $result['status']);
+        $this->assertNull(
+            $result['body']['data']['notebook_id'],
+            'unfiled, because the only other place is a notebook that is not theirs',
+        );
+    }
+
+    /**
+     * A save carrying a version the note has moved past is refused.
+     *
+     * This exercises the read check, which is what a sequential test can
+     * reach. The genuine race — both requests reading version 1 before either
+     * commits — needs two processes interleaved inside one transaction window,
+     * which this suite cannot stage; the predicate on the UPDATE is what
+     * covers it, so that the loser matches no row instead of quietly replacing
+     * a document the winner had just stored.
+     */
+    public function testAStaleSaveIsRefusedEvenWhenItPassedTheReadCheck(): void
+    {
+        $note = $this->api->post('/notes', [
+            'title' => 'Contested',
+            'document' => Support::doc('original'),
+        ])['body']['data'];
+
+        $first = $this->api->patch('/notes/' . $note['id'], [
+            'document' => Support::doc('the winner'),
+            'version' => $note['version'],
+        ]);
+        $this->assertSame(200, $first['status']);
+
+        // The same version the loser read a moment before the winner committed.
+        $second = $this->api->patch('/notes/' . $note['id'], [
+            'document' => Support::doc('the loser'),
+            'version' => $note['version'],
+        ]);
+
+        $this->assertSame(409, $second['status']);
+        $this->assertSame('VERSION_CONFLICT', $second['body']['error']['code']);
+        $this->assertContainsString(
+            'the winner',
+            $this->api->get('/notes/' . $note['id'])['body']['data']['excerpt'],
+        );
+    }
+
+    /**
+     * Every sort pages through all of its notes, once each.
+     *
+     * The keyset used to compare `(updated_at, id) <` whatever the sort was.
+     * That is right for the default and wrong for every other: `updated_asc`
+     * walks the other way, so page two handed back page one and then jumped
+     * past everything between; `created_*` and `title_*` compared a column the
+     * rows were not ordered by at all. Neither failed — they returned a page
+     * with notes silently missing from it.
+     */
+    public function testEverySortPagesWithoutRepeatingOrSkipping(): void
+    {
+        $titles = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'];
+        foreach ($titles as $title) {
+            $this->api->post('/notes', ['title' => $title, 'document' => Support::doc($title)]);
+        }
+
+        foreach (['updated_desc', 'updated_asc', 'created_desc', 'created_asc', 'title_asc', 'title_desc'] as $sort) {
+            $seen = [];
+            $cursor = null;
+
+            // Two at a time, so paging is exercised rather than skipped.
+            for ($page = 0; $page < 10; $page++) {
+                $query = ['sort' => $sort, 'limit' => 2] + ($cursor === null ? [] : ['cursor' => $cursor]);
+                $result = $this->api->get('/notes', $query);
+
+                foreach ($result['body']['data'] as $note) {
+                    $seen[] = $note['title'];
+                }
+
+                $cursor = $result['body']['meta']['next_cursor'] ?? null;
+                if ($cursor === null) {
+                    break;
+                }
+            }
+
+            sort($seen);
+            $expected = $titles;
+            sort($expected);
+            $this->assertSame($expected, $seen, $sort . ' returned each note exactly once');
+        }
+    }
+
+    /** A cursor from one sort is not read as a cursor for another. */
+    public function testReSortingStartsAgainRatherThanComparingApplesToOranges(): void
+    {
+        foreach (['Alpha', 'Bravo', 'Charlie'] as $title) {
+            $this->api->post('/notes', ['title' => $title, 'document' => Support::doc($title)]);
+        }
+
+        $byTitle = $this->api->get('/notes', ['sort' => 'title_asc', 'limit' => 1]);
+        $cursor = $byTitle['body']['meta']['next_cursor'];
+        $this->assertNotNull($cursor);
+
+        // That cursor carries a title. Handing it to a sort that compares
+        // timestamps would compare a title against a timestamptz — a 500 at
+        // best, a wrong page at worst.
+        $byDate = $this->api->get('/notes', [
+            'sort' => 'updated_desc',
+            'limit' => 10,
+            'cursor' => $cursor,
+        ]);
+
+        $this->assertSame(200, $byDate['status']);
+        $this->assertCount(3, $byDate['body']['data'], 'the list starts again from the top');
+    }
+
     public function testVersionHistoryIsCheckpointedNotOnePerKeystroke(): void
     {
         $note = $this->api->post('/notes', ['title' => 'Draft', 'document' => Support::doc('v1')])['body']['data'];

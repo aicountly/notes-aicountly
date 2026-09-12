@@ -201,9 +201,17 @@ final class NotesService
         // Optimistic concurrency. Only content edits are version-checked:
         // pinning a note from a stale list must not fail, but overwriting its
         // text with a stale document must.
+        //
+        // This read answers early and with the server's copy attached, which is
+        // what the editor needs to show a conflict. It is NOT what enforces the
+        // rule: the same number goes into the UPDATE's WHERE clause below, so
+        // two saves that both read version 4 in the same instant cannot both
+        // pass. See {@see self::expectedVersion()}.
+        $expectedVersion = null;
         if ($touchesDocument && array_key_exists('version', $input)) {
             $clientVersion = (int) $input['version'];
             $serverVersion = (int) $note['version'];
+            $expectedVersion = $clientVersion;
             if ($clientVersion !== $serverVersion) {
                 throw ApiException::conflict(
                     'This note was changed somewhere else while you were editing.',
@@ -286,15 +294,42 @@ final class NotesService
         }
 
         return Connection::transaction(function () use (
-            $identity, $noteId, $note, $updates, $bindings, $input, $document, $title
+            $identity, $noteId, $note, $updates, $bindings, $input, $document, $title, $expectedVersion
         ): array {
             if ($updates !== []) {
                 $updates[] = 'updated_by = :actor';
                 $updates[] = 'updated_at = now()';
-                Connection::execute(
-                    'UPDATE notes SET ' . implode(', ', $updates) . ' WHERE id = :id AND deleted_at IS NULL',
-                    $bindings,
-                );
+
+                // The version predicate is the check that actually holds. The
+                // read above happens before this transaction opens, so two
+                // saves racing on one note both see version 4 and both decide
+                // they are safe; without `AND version = 4` here they then both
+                // write, both increment, and the second silently replaces a
+                // document the first had just stored. With it, the loser
+                // matches no row.
+                $sql = 'UPDATE notes SET ' . implode(', ', $updates) . ' WHERE id = :id AND deleted_at IS NULL';
+                if ($expectedVersion !== null) {
+                    $sql .= ' AND version = :expected_version';
+                    $bindings['expected_version'] = $expectedVersion;
+                }
+
+                $changed = Connection::execute($sql, $bindings);
+
+                if ($changed === 0 && $expectedVersion !== null) {
+                    // Re-read rather than reporting the number this request
+                    // arrived with: the winner has already incremented it, and
+                    // the editor needs their copy to show what it lost to.
+                    $current = $this->get($identity, $noteId);
+
+                    throw ApiException::conflict(
+                        'This note was changed somewhere else while you were editing.',
+                        [
+                            'server_version' => (int) $current['version'],
+                            'client_version' => $expectedVersion,
+                            'note' => $current,
+                        ],
+                    );
+                }
             }
 
             if (array_key_exists('tags', $input) && is_array($input['tags'])) {
@@ -442,11 +477,23 @@ final class NotesService
 
         $title = $note['title'] === null ? null : Str::limit((string) $note['title'] . ' (copy)', 500);
 
+        // The copy is yours; the notebook it came from may not be. A note
+        // shared with you usually sits in the owner's notebook, and filing
+        // into that notebook needs edit rights on it — so carrying the id over
+        // unconditionally answered 404 for a notebook the duplicating user had
+        // never been told about and could do nothing with. Where they can file
+        // there, the copy lands beside the original; where they cannot, it
+        // lands unfiled, which is the only other honest place for it.
+        $notebookId = $note['notebook_id'];
+        if ($notebookId !== null && !$this->canFileInto($identity, (string) $notebookId)) {
+            $notebookId = null;
+        }
+
         $copy = $this->create($identity, [
             'title' => $title,
             'document' => $document,
             'note_type' => (string) $note['note_type'],
-            'notebook_id' => $note['notebook_id'],
+            'notebook_id' => $notebookId,
             'color' => $note['color'],
             'tags' => $this->tags->namesForNote($noteId),
             'source' => 'duplicate',
@@ -532,6 +579,24 @@ final class NotesService
     }
 
     /** A notebook the caller may file into, or null. */
+    /**
+     * May this caller put a note into that notebook?
+     *
+     * A question, not a demand: {@see resolveNotebook()} raises when the
+     * answer is no, which is right when the user named the notebook and wrong
+     * when the code inferred it.
+     */
+    private function canFileInto(Identity $identity, string $notebookId): bool
+    {
+        try {
+            $this->permissions->requireNotebook($identity, $notebookId, NotePermissionService::EDIT);
+        } catch (ApiException) {
+            return false;
+        }
+
+        return true;
+    }
+
     private function resolveNotebook(Identity $identity, mixed $notebookId): ?string
     {
         if ($notebookId === null || $notebookId === '') {

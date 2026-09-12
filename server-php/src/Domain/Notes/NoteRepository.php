@@ -66,13 +66,30 @@ final class NoteRepository
             $where .= ' AND n.owner_user_id <> :auth_user';
         }
 
+        // Keyset pagination, on whichever column the sort actually orders by.
+        //
+        // It used to compare `(n.updated_at, n.id) <` for every sort, which is
+        // only correct for the default one. `updated_asc` walks the other way,
+        // so `<` handed back the page the reader had just read and then jumped
+        // past everything in between; `created_*` and `title_*` compared a
+        // column the results were not ordered by at all, which repeats some
+        // rows and permanently skips others. The keyset has to be built from
+        // the same description as the ORDER BY, so here it is.
+        $sortName = isset(self::SORTS[(string) ($options['sort'] ?? '')])
+            ? (string) $options['sort']
+            : 'updated_desc';
+        $sortSpec = self::SORTS[$sortName];
         $cursorClause = '';
-        $cursor = $this->decodeCursor((string) ($options['cursor'] ?? ''));
+        $cursor = $this->decodeCursor((string) ($options['cursor'] ?? ''), $sortSpec, $sortName);
         if ($cursor !== null) {
-            // Keyset pagination on (updated_at, id): stable when notes are
-            // being edited underneath the reader, which OFFSET is not.
-            $cursorClause = ' AND (n.updated_at, n.id) < (:cursor_ts::timestamptz, :cursor_id::uuid)';
-            $bindings['cursor_ts'] = $cursor['ts'];
+            $comparison = $sortSpec['direction'] === 'asc' ? '>' : '<';
+            $cursorClause = sprintf(
+                ' AND (%s, n.id) %s (:cursor_value::%s, :cursor_id::uuid)',
+                $sortSpec['column'],
+                $comparison,
+                $sortSpec['cast'],
+            );
+            $bindings['cursor_value'] = $cursor['value'];
             $bindings['cursor_id'] = $cursor['id'];
         }
 
@@ -94,14 +111,18 @@ final class NoteRepository
         }
 
         $nextCursor = null;
-        if ($hasMore && $rows !== [] && str_starts_with($sort, 'n.is_pinned') === false) {
+        if ($hasMore && $rows !== [] && $sortSpec['column'] !== null) {
             $last = $rows[count($rows) - 1];
-            $nextCursor = $this->encodeCursor((string) $last['updated_at'], (string) $last['id']);
-        } elseif ($hasMore && $rows !== []) {
-            // Pinned-first ordering breaks the (updated_at, id) keyset, so that
-            // sort paginates by offset instead of silently returning wrong pages.
-            $nextCursor = null;
+            $nextCursor = $this->encodeCursor(
+                $sortName,
+                self::cursorValue($last, $sortSpec),
+                (string) $last['id'],
+            );
         }
+        // A pinned-first page has no cursor: `is_pinned DESC` is a leading sort
+        // key the keyset does not carry, so a cursor built on the second key
+        // would silently return wrong pages. `has_more` still says there is
+        // more, rather than pretending the list ends here.
 
         return [
             'notes' => $this->hydrate($rows, $identity),
@@ -212,19 +233,84 @@ final class NoteRepository
         return $byNote;
     }
 
+    /**
+     * Every sort, described once.
+     *
+     * `order` is the ORDER BY; `column`, `direction` and `cast` build the
+     * keyset predicate that pages it; `field`/`kind` say how to read the
+     * cursor's value back off the last row. Keeping them in one row of one
+     * table is the point: they were separate before, and a keyset that
+     * disagrees with its ORDER BY does not fail — it quietly returns a page
+     * with rows missing.
+     *
+     * `column` is null where no keyset is possible. `pinned_first` leads with
+     * `is_pinned`, a key the two-column cursor cannot carry.
+     *
+     * @var array<string, array{order: string, column: ?string, direction: string, cast: string, field: string, kind: string}>
+     */
+    private const SORTS = [
+        'updated_desc' => [
+            'order' => 'n.updated_at DESC, n.id DESC',
+            'column' => 'n.updated_at', 'direction' => 'desc',
+            'cast' => 'timestamptz', 'field' => 'updated_at', 'kind' => 'timestamp',
+        ],
+        'updated_asc' => [
+            'order' => 'n.updated_at ASC, n.id ASC',
+            'column' => 'n.updated_at', 'direction' => 'asc',
+            'cast' => 'timestamptz', 'field' => 'updated_at', 'kind' => 'timestamp',
+        ],
+        'created_desc' => [
+            'order' => 'n.created_at DESC, n.id DESC',
+            'column' => 'n.created_at', 'direction' => 'desc',
+            'cast' => 'timestamptz', 'field' => 'created_at', 'kind' => 'timestamp',
+        ],
+        'created_asc' => [
+            'order' => 'n.created_at ASC, n.id ASC',
+            'column' => 'n.created_at', 'direction' => 'asc',
+            'cast' => 'timestamptz', 'field' => 'created_at', 'kind' => 'timestamp',
+        ],
+        'title_asc' => [
+            'order' => "lower(coalesce(n.title, '')) ASC, n.id ASC",
+            'column' => "lower(coalesce(n.title, ''))", 'direction' => 'asc',
+            'cast' => 'text', 'field' => 'title', 'kind' => 'text',
+        ],
+        'title_desc' => [
+            'order' => "lower(coalesce(n.title, '')) DESC, n.id DESC",
+            'column' => "lower(coalesce(n.title, ''))", 'direction' => 'desc',
+            'cast' => 'text', 'field' => 'title', 'kind' => 'text',
+        ],
+        // Pinned notes stay at the top of the default view, which is the point
+        // of pinning one.
+        'pinned_first' => [
+            'order' => 'n.is_pinned DESC, n.updated_at DESC, n.id DESC',
+            'column' => null, 'direction' => 'desc',
+            'cast' => 'timestamptz', 'field' => 'updated_at', 'kind' => 'timestamp',
+        ],
+    ];
+
     private function sortClause(string $sort): string
     {
-        return match ($sort) {
-            'updated_asc' => 'n.updated_at ASC, n.id ASC',
-            'created_desc' => 'n.created_at DESC, n.id DESC',
-            'created_asc' => 'n.created_at ASC, n.id ASC',
-            'title_asc' => 'lower(coalesce(n.title, \'\')) ASC, n.id ASC',
-            'title_desc' => 'lower(coalesce(n.title, \'\')) DESC, n.id DESC',
-            // Pinned notes stay at the top of the default view, which is the
-            // point of pinning one.
-            'pinned_first' => 'n.is_pinned DESC, n.updated_at DESC, n.id DESC',
-            default => 'n.updated_at DESC, n.id DESC',
-        };
+        $spec = self::SORTS[$sort] ?? self::SORTS['updated_desc'];
+
+        return $spec['order'];
+    }
+
+    /**
+     * The value the cursor carries for this sort, taken from the last row.
+     *
+     * It has to equal what the ORDER BY expression produces for that row, or
+     * the comparison is against something the results were never sorted by —
+     * which is the bug this table exists to prevent. `title` is lowercased
+     * here because the SQL lowercases it there.
+     *
+     * @param array<string, mixed> $row
+     * @param array{field: string, kind: string} $spec
+     */
+    private static function cursorValue(array $row, array $spec): string
+    {
+        $value = (string) ($row[$spec['field']] ?? '');
+
+        return $spec['kind'] === 'text' ? mb_strtolower($value) : $value;
     }
 
     /**
@@ -239,9 +325,10 @@ final class NoteRepository
      * An unusable cursor is treated as no cursor: the reader gets the first
      * page instead of an error page.
      */
-    private function decodeCursor(string $cursor): ?array
+    /** @param array{column: ?string, cast: string, kind: string} $spec */
+    private function decodeCursor(string $cursor, array $spec, string $sort): ?array
     {
-        if ($cursor === '') {
+        if ($cursor === '' || $spec['column'] === null) {
             return null;
         }
 
@@ -251,34 +338,59 @@ final class NoteRepository
         }
 
         $decoded = json_decode($raw, true);
-        if (!is_array($decoded) || !isset($decoded['ts'], $decoded['id'])) {
+        if (!is_array($decoded) || !isset($decoded['v'], $decoded['id'], $decoded['s'])) {
             return null;
         }
 
-        $timestamp = is_scalar($decoded['ts']) ? (string) $decoded['ts'] : '';
+        $value = is_scalar($decoded['v']) ? (string) $decoded['v'] : '';
         $id = is_scalar($decoded['id']) ? (string) $decoded['id'] : '';
 
         if (!Uuid::isValid($id)) {
             return null;
         }
 
-        try {
-            $parsed = new \DateTimeImmutable($timestamp);
-        } catch (\Throwable) {
+        // A cursor is only meaningful under the sort that produced it: the
+        // value in it is a title when the list was sorted by title and a
+        // timestamp when it was not. Re-sorting mid-list therefore starts
+        // again from the top rather than comparing one against the other.
+        if ((string) $decoded['s'] !== $sort) {
             return null;
         }
 
-        return [
+        if ($spec['kind'] === 'timestamp') {
+            try {
+                $parsed = new \DateTimeImmutable($value);
+            } catch (\Throwable) {
+                return null;
+            }
+
             // Re-formatted from the parsed value rather than passed through, so
-            // only a canonical timestamp ever reaches the query.
-            'ts' => $parsed->format(\DateTimeInterface::RFC3339_EXTENDED),
-            'id' => strtolower($id),
-        ];
+            // only a canonical timestamp ever reaches the query — and to
+            // MICROseconds, because that is what `timestamptz` stores.
+            // RFC3339_EXTENDED stops at milliseconds, which rounds the cursor
+            // down below the row it was built from: an ascending page then
+            // returned its own last row again at the top of the next one, and
+            // a descending page silently skipped every other note written in
+            // the same millisecond.
+            $value = $parsed->format('Y-m-d\TH:i:s.uP');
+        } elseif (mb_strlen($value) > 500) {
+            // Titles are capped at 500, so anything longer was not made here.
+            return null;
+        }
+
+        return ['value' => $value, 'id' => strtolower($id)];
     }
 
-    private function encodeCursor(string $timestamp, string $id): string
+    private function encodeCursor(string $sort, string $value, string $id): string
     {
-        return rtrim(strtr(base64_encode((string) json_encode(['ts' => $timestamp, 'id' => $id])), '+/', '-_'), '=');
+        return rtrim(
+            strtr(
+                base64_encode((string) json_encode(['s' => $sort, 'v' => $value, 'id' => $id])),
+                '+/',
+                '-_',
+            ),
+            '=',
+        );
     }
 
     /**

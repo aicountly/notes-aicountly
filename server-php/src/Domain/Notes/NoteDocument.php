@@ -348,6 +348,19 @@ final class NoteDocument
     // -----------------------------------------------------------------------
 
     /**
+     * Node types that end a run of text.
+     *
+     * Anything that can hold text and sits beside a sibling holding more of it
+     * belongs here, or the two run together: a table row's cells would index
+     * as `AliceBob`, and a code block would fuse with the paragraph after it.
+     */
+    private const TEXT_BREAKS = [
+        'paragraph', 'heading', 'listItem', 'taskItem', 'tableRow', 'tableCell',
+        'tableHeader', 'blockquote', 'codeBlock', 'callout', 'detailsSummary',
+        'detailsContent', 'hardBreak', 'horizontalRule',
+    ];
+
+    /**
      * Flatten to plain text for `notes.extracted_text`, which is what the
      * `search_vector` generated column indexes.
      */
@@ -365,12 +378,20 @@ final class NoteDocument
             if (is_string($label) && $label !== '') {
                 $parts[] = $label;
             }
-            if (in_array($node['type'] ?? '', ['paragraph', 'heading', 'listItem', 'taskItem', 'tableRow', 'blockquote'], true)) {
+            if (in_array($node['type'] ?? '', self::TEXT_BREAKS, true)) {
                 $parts[] = "\n";
             }
         });
 
-        $text = preg_replace('/[ \t]+/u', ' ', implode(' ', $parts)) ?? '';
+        // Joined with nothing, and this is the whole point of the break list
+        // above. A run of text under one paragraph arrives as several text
+        // nodes whenever a mark starts or stops — "Ai", "count", "ly" for a
+        // word with its middle bolded — and gluing those together with spaces
+        // indexed `Ai count ly`. Searching the word the reader can plainly see
+        // then found nothing, and every excerpt showed it broken apart.
+        // Separation between blocks comes from the explicit newlines instead,
+        // which is why every container that ends a run of text is listed.
+        $text = preg_replace('/[ \t]+/u', ' ', implode('', $parts)) ?? '';
         $text = preg_replace('/\s*\n\s*/u', "\n", $text) ?? $text;
 
         return trim($text);

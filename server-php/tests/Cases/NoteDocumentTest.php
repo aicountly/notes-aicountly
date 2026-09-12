@@ -175,6 +175,54 @@ final class NoteDocumentTest extends TestCase
         $this->assertContainsString('Rahul', NoteDocument::extractText($document));
     }
 
+    /**
+     * A bolded middle does not put a space inside the word.
+     *
+     * ProseMirror splits a run of text at every mark boundary, so "Aicountly"
+     * with `count` bolded is three sibling text nodes. Joining those with
+     * spaces indexed `Ai count ly`: the word the reader can plainly see was
+     * unsearchable, and every excerpt showed it broken apart.
+     */
+    public function testAWordSplitByAMarkStaysOneWord(): void
+    {
+        $document = [
+            'type' => 'doc',
+            'content' => [[
+                'type' => 'paragraph',
+                'content' => [
+                    ['type' => 'text', 'text' => 'Ai'],
+                    ['type' => 'text', 'text' => 'count', 'marks' => [['type' => 'bold']]],
+                    ['type' => 'text', 'text' => 'ly is live'],
+                ],
+            ]],
+        ];
+
+        $this->assertSame('Aicountly is live', NoteDocument::extractText($document));
+    }
+
+    /** And blocks beside each other still do not run together. */
+    public function testAdjacentBlocksAreStillSeparated(): void
+    {
+        $document = [
+            'type' => 'doc',
+            'content' => [
+                ['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'First']]],
+                ['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'Second']]],
+                ['type' => 'table', 'content' => [[
+                    'type' => 'tableRow',
+                    'content' => [
+                        ['type' => 'tableCell', 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'Alice']]]]],
+                        ['type' => 'tableCell', 'content' => [['type' => 'paragraph', 'content' => [['type' => 'text', 'text' => 'Bob']]]]],
+                    ],
+                ]]],
+            ],
+        ];
+
+        $text = NoteDocument::extractText($document);
+        $this->assertFalse(str_contains($text, 'FirstSecond'), 'paragraphs keep their boundary');
+        $this->assertFalse(str_contains($text, 'AliceBob'), 'so do cells in one row');
+    }
+
     public function testExtractsChecklistItemsInOrder(): void
     {
         $document = \Aicountly\Api\Tests\Support::checklist([
